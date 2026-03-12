@@ -60,7 +60,7 @@ var (
 		Bold(true)
 
 	HelpDesc = lipgloss.NewStyle().
-		Foreground(Muted)
+			Foreground(Muted)
 
 	// Content area
 	ContentStyle = lipgloss.NewStyle().
@@ -86,17 +86,17 @@ var (
 			BorderForeground(Muted)
 
 	TableRow = lipgloss.NewStyle().
-		Foreground(Text)
+			Foreground(Text)
 
 	TableRowSelected = lipgloss.NewStyle().
-			Foreground(Primary).
-			Bold(true)
+				Foreground(Primary).
+				Bold(true)
 
 	// Delay colors
-	DelayFast = lipgloss.NewStyle().Foreground(Success)   // <200ms
-	DelaySlow = lipgloss.NewStyle().Foreground(Warning)   // 200-500ms
-	DelayBad  = lipgloss.NewStyle().Foreground(Danger)    // >=500ms
-	DelayNone = lipgloss.NewStyle().Foreground(Muted)     // timeout/unknown
+	DelayFast = lipgloss.NewStyle().Foreground(Success) // <200ms
+	DelaySlow = lipgloss.NewStyle().Foreground(Warning) // 200-500ms
+	DelayBad  = lipgloss.NewStyle().Foreground(Danger)  // >=500ms
+	DelayNone = lipgloss.NewStyle().Foreground(Muted)   // timeout/unknown
 
 	// Toggle
 	ToggleOn  = lipgloss.NewStyle().Foreground(Success).Bold(true)
@@ -112,6 +112,36 @@ var (
 	// Group header
 	GroupExpanded  = lipgloss.NewStyle().Foreground(Text).Bold(true)
 	GroupCollapsed = lipgloss.NewStyle().Foreground(Muted).Bold(true)
+
+	ProxyGroupBox = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(Muted).
+			Padding(0, 1).
+			Foreground(Text)
+
+	ProxyGroupBoxSelected = ProxyGroupBox.Copy().
+				BorderForeground(Primary)
+
+	ProxyGroupHeader = lipgloss.NewStyle().
+				Foreground(Text).
+				Bold(true)
+
+	ProxyGroupHeaderSelected = ProxyGroupHeader.Copy().
+					Foreground(Primary)
+
+	ProxyCard = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(Muted).
+			Padding(0, 1).
+			Foreground(Text)
+
+	ProxyCardCurrent = ProxyCard.Copy().
+				BorderForeground(Success)
+
+	ProxyCardSelected = ProxyCard.Copy().
+				BorderForeground(Primary).
+				Background(BgDark).
+				Bold(true)
 
 	// Mode tabs
 	ModeActive   = lipgloss.NewStyle().Foreground(Primary).Bold(true).Underline(true)
