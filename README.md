@@ -6,17 +6,15 @@ Linux/macOS box. It talks to the mihomo controller over the Unix socket
 (`/tmp/verge/verge-mihomo.sock`) or a TCP external-controller, and ships as a
 single static binary with no runtime dependencies.
 
-```
-  Clash Verge TUI                                  ▲ 24.0 KB/s  ▼ 3.8 KB/s  MEM 74M
-                ╭─ Core Status ──────────────────────────────────────────────────╮
-  ❯ Home        │  Status         ● connected                                     │
-    Proxy       │  Core Version   v1.19.26                                        │
-    Conns       │  Mode           rule                                            │
-    Rules       │  Mixed Port     7897                                            │
-    Logs        │  Memory         74.3 MB                                         │
-    About       │  Active Conns   67                                             │
-                ╰────────────────────────────────────────────────────────────────╯
-```
+## Screenshots
+
+<p>
+  <img src="assets/view-home.png" alt="Home view showing mihomo runtime status" width="900">
+</p>
+
+<p>
+  <img src="assets/view-config.png" alt="Runtime config view showing toggles and editable settings" width="900">
+</p>
 
 ## Features
 
@@ -36,6 +34,8 @@ single static binary with no runtime dependencies.
 - **Rules** — searchable routing rules.
 - **Logs** — live `WS /logs` stream with level filter (`l`), text filter (`/`),
   pause (`space`), and clear (`c`).
+- **Config** — terminal-safe controls for TUN, LAN exposure, log level, mixed
+  port and runtime mode.
 
 > **Note on TCP/ICMP:** the mihomo API does not expose node server addresses, so
 > these modes parse the running mihomo config to find each `server:port`. They
@@ -51,7 +51,7 @@ make install        # -> /usr/local/bin/clash-vr-tui (PREFIX overridable)
 make dist           # cross-compile release binaries into dist/
 ```
 
-Requires Go 1.24+.
+Requires Go 1.25+.
 
 ## Usage
 
@@ -89,10 +89,11 @@ clash-vr-tui status --json | jq .mode
 | Scope | Keys |
 |-------|------|
 | Global | `Tab`/`Shift+Tab` page · `1`–`6` jump · `?` help · `r` refresh · `R` restart core · `q`/`Ctrl+C` quit |
-| Proxies | `←→`/`hl` panel · `Enter` select · `d`/`D` test · `T` test mode · `o` sort · `u` unpin · `/` filter |
+| Proxies | `←→`/`hl` panel · `j`/`k` move · `Ctrl+d`/`Ctrl+u` half-page · `g`/`G` top/bottom · `Enter` select · `d`/`D` test · `T` test mode · `o` sort · `u` unpin · `/` filter |
 | Connections | `Enter` detail · `x` close · `X` close all · `s` sort · `/` filter |
 | Rules | `g`/`G` top/bottom · `/` filter |
 | Logs | `space` pause · `l` level · `c` clear · `/` filter |
+| Config | `Enter` edit · `Space` toggle · `j`/`k` move |
 
 While a filter input is open, every key (including `q`) types into it; `Esc`
 closes it. `Ctrl+C` always quits.
