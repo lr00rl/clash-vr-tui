@@ -10,10 +10,6 @@ import (
 
 var (
 	// Palette: warm terminal cockpit, tuned for SSH and truecolor terminals.
-	Ink        = lipgloss.Color("#151511")
-	InkRaised  = lipgloss.Color("#1F201A")
-	Panel      = lipgloss.Color("#24251E")
-	PanelSoft  = lipgloss.Color("#2B2B23")
 	Border     = lipgloss.Color("#4C4B3E")
 	BorderSoft = lipgloss.Color("#35362D")
 	Accent     = lipgloss.Color("#D8A657")
@@ -26,8 +22,6 @@ var (
 	Text       = lipgloss.Color("#EAE1C8")
 	TextSubtle = lipgloss.Color("#BFB69C")
 	TextFaint  = lipgloss.Color("#8F8978")
-	BgDark     = InkRaised
-	BgSidebar  = Ink
 	Primary    = Accent
 
 	// Base text
@@ -46,7 +40,6 @@ var (
 
 	// Sidebar
 	SidebarStyle = lipgloss.NewStyle().
-			Background(BgSidebar).
 			Foreground(Text).
 			Padding(1, 1)
 
@@ -62,7 +55,6 @@ var (
 	// Status bar
 	StatusBar = lipgloss.NewStyle().
 			Foreground(Text).
-			Background(Ink).
 			Padding(0, 1)
 
 	StatusTitle = lipgloss.NewStyle().
@@ -78,7 +70,6 @@ var (
 	// Help bar
 	HelpBar = lipgloss.NewStyle().
 		Foreground(TextFaint).
-		Background(Ink).
 		Padding(0, 1)
 
 	HelpKey = lipgloss.NewStyle().
@@ -91,7 +82,6 @@ var (
 	// Content area
 	ContentStyle = lipgloss.NewStyle().
 			Foreground(Text).
-			Background(InkRaised).
 			Padding(0, 1)
 
 	// Section boxes
@@ -131,7 +121,6 @@ var (
 			Border(lipgloss.ThickBorder()).
 			BorderForeground(Accent).
 			Padding(1, 2).
-			Background(Panel).
 			Foreground(Text)
 
 	// Group header
@@ -191,8 +180,7 @@ var (
 			BorderForeground(Accent)
 
 	PanelFlat = lipgloss.NewStyle().
-			Foreground(Text).
-			Background(InkRaised)
+			Foreground(Text)
 
 	Chip = lipgloss.NewStyle().
 		Foreground(TextSubtle).
