@@ -128,6 +128,7 @@ func (m Model) ShowHelp() Model {
 		"  q / Ctrl+C         Quit",
 		"  ?                  Toggle this help",
 		"  r                  Refresh current page",
+		"  R                  Restart mihomo core",
 		"  Esc                Close filter / overlay",
 		"",
 		"Home",

@@ -137,3 +137,36 @@ func (c *Client) delete(path string) error {
 	}
 	return nil
 }
+
+// post sends a POST request with an optional JSON body (nil for none). Used for
+// system operations like /restart, /configs/geo, and /cache/*/flush.
+func (c *Client) post(path string, payload interface{}) ([]byte, error) {
+	var bodyReader io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal: %w", err)
+		}
+		bodyReader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body %s: %w", path, err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("POST %s: status %d: %s", path, resp.StatusCode, string(body))
+	}
+	return body, nil
+}

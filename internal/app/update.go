@@ -53,6 +53,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if page, ok := pageForNumberKey(msg); ok {
 				return m, func() tea.Msg { return messages.SwitchPageMsg{Page: page} }
 			}
+			// Restart core (global, with confirmation).
+			if msg.String() == "R" {
+				client := m.client
+				m.overlay = m.overlay.ShowConfirm(
+					"Restart mihomo Core",
+					"Restart the core now? Active connections will drop briefly.",
+					func() tea.Msg {
+						return messages.CoreRestartMsg{Err: client.RestartCore()}
+					},
+				)
+				return m, nil
+			}
 			// Connection detail (Enter) is handled at root so it can build the
 			// overlay from the selected connection.
 			if msg.String() == "enter" && m.activePage == messages.PageConnections {
@@ -108,6 +120,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connsStarted:
 		m.connsCancel = msg.cancel
 		m.statusbar.Memory = msg.first.Memory
+		m.home = m.home.SetStats(msg.first.Memory, len(msg.first.Connections))
 		var cmd tea.Cmd
 		m.connections, cmd = m.connections.Update(messages.ConnectionsMsg{Data: msg.first})
 		if cmd != nil {
@@ -116,6 +129,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, waitForConns(msg.ch))
 	case connsTick:
 		m.statusbar.Memory = msg.data.Memory
+		m.home = m.home.SetStats(msg.data.Memory, len(msg.data.Connections))
 		var cmd tea.Cmd
 		m.connections, cmd = m.connections.Update(messages.ConnectionsMsg{Data: msg.data})
 		if cmd != nil {
@@ -266,6 +280,23 @@ func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 		} else {
 			cmds = append(cmds, m.flash("All connections closed", false))
 		}
+	case messages.CoreRestartMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash("Restart failed: "+msg.Err.Error(), true))
+		} else {
+			cmds = append(cmds, m.flash("Core restarting… reconnecting", false))
+			// Re-fetch page data once the core is back up. Streams auto-reconnect.
+			cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg {
+				return refetchAll{}
+			}))
+		}
+	case refetchAll:
+		cmds = append(cmds,
+			m.home.Init(),
+			m.proxies.Init(),
+			m.rules.Init(),
+			m.settings.Init(),
+		)
 	case messages.ErrMsg:
 		if msg.Err != nil {
 			cmds = append(cmds, m.flash(msg.Err.Error(), true))
@@ -277,6 +308,9 @@ func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 	}
 	return nil
 }
+
+// refetchAll triggers a refresh of all pages' data (used after a core restart).
+type refetchAll struct{}
 
 func (m Model) initPage(page messages.Page) tea.Cmd {
 	switch page {

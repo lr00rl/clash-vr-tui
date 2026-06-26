@@ -116,5 +116,5 @@ type AllConnsClosedMsg struct {
 // ErrMsg carries a generic error.
 type ErrMsg struct{ Err error }
 
-// WSReconnectMsg signals that a WebSocket should reconnect.
-type WSReconnectMsg struct{ Stream string }
+// CoreRestartMsg signals a core restart attempt completed.
+type CoreRestartMsg struct{ Err error }

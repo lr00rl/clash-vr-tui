@@ -14,14 +14,16 @@ import (
 )
 
 type Model struct {
-	client    *api.Client
-	config    *api.Config
-	version   *api.VersionInfo
-	ruleCount int
-	startTime time.Time
-	width     int
-	height    int
-	err       error
+	client      *api.Client
+	config      *api.Config
+	version     *api.VersionInfo
+	ruleCount   int
+	memory      int64
+	activeConns int
+	startTime   time.Time
+	width       int
+	height      int
+	err         error
 }
 
 func New(client *api.Client) Model {
@@ -42,6 +44,13 @@ func (m Model) Init() tea.Cmd {
 func (m Model) SetSize(w, h int) Model {
 	m.width = w
 	m.height = h
+	return m
+}
+
+// SetStats updates live core stats fed from the connections stream.
+func (m Model) SetStats(memory int64, activeConns int) Model {
+	m.memory = memory
+	m.activeConns = activeConns
 	return m
 }
 
@@ -90,57 +99,60 @@ func (m Model) View() string {
 		return ""
 	}
 
-	boxW := m.width - 2
+	// Account for the surrounding ContentStyle padding (2) and the section box
+	// border (2) so the rounded boxes never overflow and wrap.
+	boxW := m.width - 4
 	if boxW < 20 {
 		boxW = 20
 	}
 
-	// Quick Controls
-	var tun, mode string
+	// --- Quick Controls ---
+	var tun, mode, lan string
 	if m.config != nil {
 		tun = renderToggle(m.config.TUN.Enable)
 		mode = styles.ModeActive.Render(fmt.Sprintf("[%s]", m.config.Mode))
+		lan = renderToggle(m.config.AllowLan)
 	} else {
-		tun = styles.ToggleOff.Render("[--]")
-		mode = styles.ToggleOff.Render("[--]")
+		tun, mode, lan = dash(), dash(), dash()
 	}
-
 	controls := styles.SectionBorder.Width(boxW).Render(
 		styles.SectionTitle.Render("Quick Controls") + "\n" +
-			fmt.Sprintf(" TUN %s   Mode %s", tun, mode),
+			fmt.Sprintf(" TUN %s   Allow-LAN %s   Mode %s", tun, lan, mode) + "\n" +
+			styles.HelpDesc.Render(" t toggle TUN · m cycle mode · R restart core"),
 	)
 
-	// Clash Info
-	var coreVer, proxyAddr, mixedPort, uptime, rules string
-	if m.version != nil {
-		coreVer = m.version.Version
-	} else {
-		coreVer = "--"
+	// --- Core status ---
+	coreVer := valueOr(func() string { return m.version.Version }, m.version != nil)
+	status := styles.DelayBad.Render("● disconnected")
+	if m.version != nil && m.config != nil {
+		status = styles.DelayFast.Render("● connected")
 	}
+	var proxyAddr, mixedPort, mode2 string
 	if m.config != nil {
 		proxyAddr = fmt.Sprintf("127.0.0.1:%d", m.config.MixedPort)
 		mixedPort = fmt.Sprintf("%d", m.config.MixedPort)
+		mode2 = m.config.Mode
 	} else {
-		proxyAddr = "--"
-		mixedPort = "--"
+		proxyAddr, mixedPort, mode2 = "--", "--", "--"
 	}
-	uptime = formatDuration(time.Since(m.startTime))
-	rules = fmt.Sprintf("%d", m.ruleCount)
-
 	clashInfo := styles.SectionBorder.Width(boxW).Render(
-		styles.SectionTitle.Render("Clash Info") + "\n" +
+		styles.SectionTitle.Render("Core Status") + "\n" +
+			infoRow("Status", status) +
 			infoRow("Core Version", coreVer) +
+			infoRow("Mode", mode2) +
 			infoRow("Proxy Addr", proxyAddr) +
 			infoRow("Mixed Port", mixedPort) +
-			infoRow("TUI Uptime", uptime) +
-			infoRow("Rules Count", rules),
+			infoRow("Memory", formatBytes(m.memory)) +
+			infoRow("Active Conns", fmt.Sprintf("%d", m.activeConns)) +
+			infoRow("Rules Count", fmt.Sprintf("%d", m.ruleCount)) +
+			infoRow("TUI Uptime", formatDuration(time.Since(m.startTime))),
 	)
 
-	// System Info
-	osInfo := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	// --- System Info ---
 	sysInfo := styles.SectionBorder.Width(boxW).Render(
 		styles.SectionTitle.Render("System Info") + "\n" +
-			infoRow("OS", osInfo) +
+			infoRow("OS", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)) +
+			infoRow("Socket", m.client.SocketPath()) +
 			infoRow("Go Version", runtime.Version()),
 	)
 
@@ -189,8 +201,17 @@ func renderToggle(on bool) string {
 	return styles.ToggleOff.Render("[OFF]")
 }
 
+func dash() string { return styles.ToggleOff.Render("[--]") }
+
+func valueOr(get func() string, ok bool) string {
+	if ok {
+		return get()
+	}
+	return "--"
+}
+
 func infoRow(label, value string) string {
-	return fmt.Sprintf(" %-16s %s\n", label, value)
+	return fmt.Sprintf(" %-14s %s\n", label, value)
 }
 
 func cycleMode(current string) string {
@@ -209,4 +230,17 @@ func formatDuration(d time.Duration) string {
 	m := int(d.Minutes()) % 60
 	s := int(d.Seconds()) % 60
 	return fmt.Sprintf("%dh %dm %ds", h, m, s)
+}
+
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1024*1024*1024:
+		return fmt.Sprintf("%.1f GB", float64(b)/(1024*1024*1024))
+	case b >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
+	case b >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(b)/1024)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
