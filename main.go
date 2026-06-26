@@ -9,11 +9,17 @@ import (
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
 	"github.com/cdcd/clash-vr-tui/internal/app"
+	"github.com/cdcd/clash-vr-tui/internal/cli"
 )
 
 var version = "dev"
 
 func main() {
+	// If the args contain a known subcommand, run it non-interactively.
+	if code, handled := cli.Maybe(os.Args[1:], api.DefaultSocketPath(), version); handled {
+		os.Exit(code)
+	}
+
 	socketPath := flag.String("socket", api.DefaultSocketPath(), "mihomo Unix socket path")
 	showVersion := flag.Bool("version", false, "show version")
 	flag.Parse()
