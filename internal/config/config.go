@@ -56,17 +56,28 @@ func Load() File {
 }
 
 // Resolve merges flags > env > file > defaults into a connection config.
+// Within each tier, an explicit server selects TCP over a socket; a higher tier
+// fully overrides lower ones (so --socket wins over a file-level server).
 func Resolve(flags Flags) Resolved {
 	f := Load()
-	socket := first(flags.Socket, os.Getenv("CLASH_VR_TUI_SOCKET"), f.Socket)
-	server := first(flags.Server, os.Getenv("CLASH_VR_TUI_SERVER"), f.Server)
-	secret := first(flags.Secret, os.Getenv("CLASH_VR_TUI_SECRET"), f.Secret)
-
-	ep := api.Endpoint{Secret: secret}
-	if server != "" {
-		ep.Server = server
-	} else {
-		ep.Socket = first(socket, api.DefaultSocketPath())
+	ep := api.Endpoint{
+		Secret: first(flags.Secret, os.Getenv("CLASH_VR_TUI_SECRET"), f.Secret),
+	}
+	switch {
+	case flags.Server != "":
+		ep.Server = flags.Server
+	case flags.Socket != "":
+		ep.Socket = flags.Socket
+	case os.Getenv("CLASH_VR_TUI_SERVER") != "":
+		ep.Server = os.Getenv("CLASH_VR_TUI_SERVER")
+	case os.Getenv("CLASH_VR_TUI_SOCKET") != "":
+		ep.Socket = os.Getenv("CLASH_VR_TUI_SOCKET")
+	case f.Server != "":
+		ep.Server = f.Server
+	case f.Socket != "":
+		ep.Socket = f.Socket
+	default:
+		ep.Socket = api.DefaultSocketPath()
 	}
 	return Resolved{
 		Endpoint:   ep,

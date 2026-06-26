@@ -1,1 +1,12 @@
-clash-vr-tui
+# build artifacts
+/clash-vr-tui
+/dist/
+*.exe
+
+# go
+*.test
+*.out
+coverage.txt
+
+# editor/OS
+.DS_Store
