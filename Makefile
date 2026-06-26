@@ -3,9 +3,10 @@ VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 GOFLAGS     := -trimpath
 PREFIX      ?= /usr/local
-PLATFORMS   := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+PLATFORMS   := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+GORELEASER  ?= goreleaser
 
-.PHONY: all build run test race vet fmt lint install clean dist
+.PHONY: all build run test race vet fmt lint install clean dist release-check snapshot
 
 all: build
 
@@ -48,6 +49,12 @@ dist: ## Cross-compile release binaries into dist/
 			go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $$out . || exit 1; \
 	done
 	@echo "done -> dist/"
+
+release-check: ## Validate GoReleaser configuration
+	$(GORELEASER) check
+
+snapshot: ## Build a local GoReleaser snapshot into dist/
+	$(GORELEASER) release --snapshot --clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

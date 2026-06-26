@@ -1,5 +1,8 @@
 # clash-vr-tui
 
+[![CI](https://github.com/lr00rl/clash-vr-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/lr00rl/clash-vr-tui/actions/workflows/ci.yml)
+[![Release](https://github.com/lr00rl/clash-vr-tui/actions/workflows/release.yml/badge.svg)](https://github.com/lr00rl/clash-vr-tui/actions/workflows/release.yml)
+
 A terminal UI (and CLI) for the **mihomo** core behind **Clash Verge Rev** — built
 for driving your proxy from a pure terminal, including over SSH on a remote
 Linux/macOS box. It talks to the mihomo controller over the Unix socket
@@ -15,6 +18,41 @@ single static binary with no runtime dependencies.
 <p>
   <img src="assets/view-config.png" alt="Runtime config view showing toggles and editable settings" width="900">
 </p>
+
+## Quickstart
+
+Install the latest release on Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lr00rl/clash-vr-tui/main/scripts/install.sh | sh
+```
+
+If no tagged release has been published yet, build from source:
+
+```sh
+git clone https://github.com/lr00rl/clash-vr-tui.git
+cd clash-vr-tui
+make build
+./clash-vr-tui
+```
+
+Then run the TUI on the same machine as Clash Verge Rev / mihomo:
+
+```sh
+clash-vr-tui
+```
+
+If your mihomo controller is exposed over TCP instead of the Verge Unix socket:
+
+```sh
+clash-vr-tui --server 127.0.0.1:9090 --secret your-secret
+```
+
+For a non-interactive smoke test over SSH:
+
+```sh
+clash-vr-tui status
+```
 
 ## Features
 
@@ -45,6 +83,42 @@ single static binary with no runtime dependencies.
 
 ## Install
 
+### Release installer
+
+The installer downloads a release archive, verifies it against `checksums.txt`
+when `sha256sum` or `shasum` is available, and installs to `~/.local/bin` by
+default.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lr00rl/clash-vr-tui/main/scripts/install.sh | sh
+```
+
+Common overrides:
+
+```sh
+BINDIR=/usr/local/bin sh -c "$(curl -fsSL https://raw.githubusercontent.com/lr00rl/clash-vr-tui/main/scripts/install.sh)"
+VERSION=v0.1.0 sh -c "$(curl -fsSL https://raw.githubusercontent.com/lr00rl/clash-vr-tui/main/scripts/install.sh)"
+```
+
+### Manual download
+
+Download the archive for your platform from
+[GitHub Releases](https://github.com/lr00rl/clash-vr-tui/releases), unpack it,
+and put `clash-vr-tui` on your `PATH`.
+
+Release asset names:
+
+| Platform | Asset |
+|----------|-------|
+| Linux x86_64 | `clash-vr-tui_linux_amd64.tar.gz` |
+| Linux arm64 | `clash-vr-tui_linux_arm64.tar.gz` |
+| macOS Intel | `clash-vr-tui_darwin_amd64.tar.gz` |
+| macOS Apple Silicon | `clash-vr-tui_darwin_arm64.tar.gz` |
+| Windows x86_64 | `clash-vr-tui_windows_amd64.zip` |
+| Windows arm64 | `clash-vr-tui_windows_arm64.zip` |
+
+### Build from source
+
 ```sh
 make build          # -> ./clash-vr-tui
 make install        # -> /usr/local/bin/clash-vr-tui (PREFIX overridable)
@@ -52,6 +126,17 @@ make dist           # cross-compile release binaries into dist/
 ```
 
 Requires Go 1.25+.
+
+## Supported Platforms
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Linux amd64 / arm64 | Primary | Best fit for SSH usage. Supports Unix socket and TCP controller connections. |
+| macOS amd64 / arm64 | Primary | Works with Clash Verge Rev's default Unix socket path. |
+| Windows amd64 / arm64 | Secondary | Use `--server host:port`; the default Verge Unix socket path is not available. |
+
+The TUI is designed for real terminals over SSH. It does not require a desktop
+environment, and the CLI subcommands are intended for scripts and automation.
 
 ## Usage
 
@@ -119,3 +204,36 @@ test-url: ""       # default delay-test URL
 Go + [bubbletea](https://github.com/charmbracelet/bubbletea) (Elm architecture)
 with lipgloss styling. REST + WebSocket over a Unix-socket or TCP transport.
 See `docs/plans/` for the design notes.
+
+## Release Workflow
+
+CI runs on pushes, pull requests, and manual dispatch:
+
+- `gofmt` check
+- `go vet ./...`
+- `go test ./...`
+- host build
+- cross-build matrix via `make dist`
+- GoReleaser config validation
+
+Tagged releases are published by GoReleaser. To cut a release:
+
+```sh
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow builds Linux, macOS, and Windows artifacts for amd64 and
+arm64, uploads archives plus `checksums.txt`, and makes the installer work via
+GitHub's `latest/download` URLs.
+
+For a local release dry-run:
+
+```sh
+make release-check
+make snapshot
+```
+
+These local release targets require the GoReleaser v2 CLI. GitHub Actions uses
+`goreleaser/goreleaser-action`, so contributors do not need GoReleaser installed
+for normal PR validation.

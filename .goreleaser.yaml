@@ -1,5 +1,6 @@
 # goreleaser config — https://goreleaser.com
 version: 2
+project_name: clash-vr-tui
 
 before:
   hooks:
@@ -24,7 +25,7 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
 
 checksum:
   name_template: checksums.txt
