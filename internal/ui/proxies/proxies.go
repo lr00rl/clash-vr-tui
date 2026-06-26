@@ -3,7 +3,10 @@ package proxies
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -11,7 +14,15 @@ import (
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
 	"github.com/cdcd/clash-vr-tui/internal/messages"
+	"github.com/cdcd/clash-vr-tui/internal/probe"
 	"github.com/cdcd/clash-vr-tui/internal/styles"
+)
+
+// probeTimeout bounds a single TCP/ICMP test; probeConcurrency caps parallel
+// pings when testing a whole group.
+const (
+	probeTimeout     = 3 * time.Second
+	probeConcurrency = 32
 )
 
 type SortMode int
@@ -60,6 +71,9 @@ type Model struct {
 	filter      string
 	filtering   bool
 	sortMode    SortMode
+	testMode    probe.Mode
+	endpoints   *probe.Endpoints
+	epErr       error
 	mode        string
 	focus       string
 	width       int
@@ -69,9 +83,11 @@ type Model struct {
 
 func New(client *api.Client) Model {
 	return Model{
-		client:   client,
-		sortMode: SortDefault,
-		focus:    focusGroups,
+		client:    client,
+		sortMode:  SortDefault,
+		testMode:  probe.ModeHTTP,
+		endpoints: probe.NewEndpoints(),
+		focus:     focusGroups,
 	}
 }
 
@@ -215,16 +231,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.focus == focusGroups {
-			return m, m.testGroupDelay(group.Name)
+			return m, m.testGroup(*group)
 		}
 		nodes := m.currentNodes()
 		if m.nodeCursor < len(nodes) {
-			return m, m.testProxyDelay(nodes[m.nodeCursor])
+			return m, m.testNode(nodes[m.nodeCursor])
 		}
 	case "D":
 		nodes := m.currentNodes()
 		if m.nodeCursor < len(nodes) {
-			return m, m.testProxyDelay(nodes[m.nodeCursor])
+			return m, m.testNode(nodes[m.nodeCursor])
+		}
+	case "T":
+		m.testMode = m.testMode.Next()
+		m.ensureEndpoints()
+	case "u":
+		group := m.selectedGroup()
+		if group != nil && (group.Type == "URLTest" || group.Type == "Fallback") {
+			return m, m.unfixGroup(group.Name)
 		}
 	case "o":
 		m.sortMode = (m.sortMode + 1) % 3
@@ -235,6 +259,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchGroups(), m.fetchConfig())
 	}
 	return m, nil
+}
+
+// ensureEndpoints lazily loads node server endpoints from the running config the
+// first time a TCP/ICMP test mode is selected.
+func (m *Model) ensureEndpoints() {
+	if !m.testMode.NeedsEndpoints() {
+		return
+	}
+	if m.endpoints == nil {
+		m.endpoints = probe.NewEndpoints()
+	}
+	if m.endpoints.Len() == 0 {
+		m.epErr = m.endpoints.Load("")
+	}
 }
 
 func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -293,8 +331,17 @@ func (m Model) renderHeaderLines() []string {
 		}
 	}
 
+	testInfo := fmt.Sprintf("[Test: %s]", m.testMode)
+	if m.testMode.NeedsEndpoints() {
+		if m.epErr != nil {
+			testInfo += styles.DelayBad.Render(" config?")
+		} else if m.endpoints != nil {
+			testInfo += styles.DelayNone.Render(fmt.Sprintf(" %d nodes", m.endpoints.Len()))
+		}
+	}
+
 	lines := []string{
-		"Mode: " + strings.Join(tabs, "  ") + fmt.Sprintf("    [Sort: %s]  [Focus: %s]", m.sortMode.String(), m.focus),
+		"Mode: " + strings.Join(tabs, "  ") + fmt.Sprintf("    [Sort: %s]  %s  [Focus: %s]", m.sortMode.String(), testInfo, m.focus),
 		strings.Repeat("─", max(m.width-2, 0)),
 	}
 	if m.filtering {
@@ -432,9 +479,11 @@ func (m Model) renderProxyCard(name string, idx, outerWidth int) string {
 	group := m.selectedGroup()
 	delay := 0
 	current := ""
+	fixed := ""
 	if group != nil {
 		delay = getDelay(name, m.selectedGroupState().delays)
 		current = group.Now
+		fixed = group.Fixed
 	}
 
 	innerWidth := max(outerWidth-cardChromeWidth, 8)
@@ -442,6 +491,9 @@ func (m Model) renderProxyCard(name string, idx, outerWidth int) string {
 	status := "standby"
 	if name == current {
 		status = "active"
+	}
+	if name == fixed && fixed != "" {
+		status = "pinned"
 	}
 	delayLine := truncateDisplayWidth(status, max(innerWidth-10, 4)) + padLeft(styles.DelayStyle(delay).Render(styles.FormatDelay(delay)), 10)
 
@@ -546,15 +598,22 @@ func (m Model) visibleGroups() []visibleGroup {
 
 		nodes := m.sortedNodes(i)
 		if filter != "" {
+			delayQ := isDelayQuery(filter)
 			filtered := make([]string, 0, len(nodes))
 			for _, name := range nodes {
-				if strings.Contains(strings.ToLower(name), filter) {
+				if matchNode(name, getDelay(name, g.delays), filter) {
 					filtered = append(filtered, name)
 				}
 			}
-			groupText := strings.ToLower(g.group.Name + " " + g.group.Now + " " + g.group.Type)
-			if len(filtered) == 0 && !strings.Contains(groupText, filter) {
-				continue
+			if delayQ {
+				if len(filtered) == 0 {
+					continue
+				}
+			} else {
+				groupText := strings.ToLower(g.group.Name + " " + g.group.Now + " " + g.group.Type)
+				if len(filtered) == 0 && !strings.Contains(groupText, filter) {
+					continue
+				}
 			}
 			nodes = filtered
 		}
@@ -669,6 +728,51 @@ func getDelay(name string, delays map[string]int) int {
 	return delays[name]
 }
 
+// isDelayQuery reports whether a filter is a delay predicate (delay<N, delay>N,
+// delay=timeout) rather than a plain substring search.
+func isDelayQuery(filter string) bool {
+	_, _, ok := parseDelayQuery(filter)
+	return ok
+}
+
+// matchNode reports whether a node matches the filter — either a delay predicate
+// against its measured delay, or a case-insensitive substring of its name.
+func matchNode(name string, delay int, filter string) bool {
+	if op, threshold, ok := parseDelayQuery(filter); ok {
+		switch op {
+		case "<":
+			return delay > 0 && delay < threshold
+		case ">":
+			return delay > 0 && delay > threshold
+		case "timeout":
+			return delay <= 0
+		}
+		return false
+	}
+	return strings.Contains(strings.ToLower(name), strings.ToLower(filter))
+}
+
+func parseDelayQuery(f string) (op string, threshold int, ok bool) {
+	f = strings.TrimSpace(strings.ToLower(f))
+	if !strings.HasPrefix(f, "delay") {
+		return "", 0, false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(f, "delay"))
+	switch {
+	case strings.HasPrefix(rest, "<"):
+		if n, err := strconv.Atoi(strings.TrimSpace(rest[1:])); err == nil {
+			return "<", n, true
+		}
+	case strings.HasPrefix(rest, ">"):
+		if n, err := strconv.Atoi(strings.TrimSpace(rest[1:])); err == nil {
+			return ">", n, true
+		}
+	case strings.HasPrefix(rest, "=timeout"), strings.HasPrefix(rest, "=0"):
+		return "timeout", 0, true
+	}
+	return "", 0, false
+}
+
 func truncateDisplayWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
@@ -718,20 +822,96 @@ func (m Model) selectProxy(group, proxy string) tea.Cmd {
 	}
 }
 
-func (m Model) testGroupDelay(group string) tea.Cmd {
+// testGroup tests every node in a group using the active test mode.
+func (m Model) testGroup(group api.Group) tea.Cmd {
+	if m.testMode.NeedsEndpoints() {
+		return m.testGroupProbe(group)
+	}
+	name, testURL := group.Name, group.TestURL
 	return func() tea.Msg {
-		result, err := m.client.TestGroupDelay(group, "", 0)
-		return messages.GroupDelayMsg{Group: group, Result: result, Err: err}
+		result, err := m.client.TestGroupDelay(name, testURL, 0)
+		return messages.GroupDelayMsg{Group: name, Result: result, Err: err}
 	}
 }
 
-func (m Model) testProxyDelay(name string) tea.Cmd {
+// testNode tests a single node using the active test mode.
+func (m Model) testNode(name string) tea.Cmd {
+	mode, ep := m.testMode, m.endpoints
+	testURL := ""
+	if g := m.selectedGroup(); g != nil {
+		testURL = g.TestURL
+	}
+	if mode.NeedsEndpoints() {
+		return func() tea.Msg {
+			d, err := probePing(ep, mode, name)
+			return messages.ProxyDelayMsg{Name: name, Delay: d, Err: err}
+		}
+	}
 	return func() tea.Msg {
-		result, err := m.client.TestProxyDelay(name, "", 0)
+		result, err := m.client.TestProxyDelay(name, testURL, 0)
 		delay := 0
 		if result != nil {
 			delay = result.Delay
 		}
 		return messages.ProxyDelayMsg{Name: name, Delay: delay, Err: err}
+	}
+}
+
+// testGroupProbe runs TCP/ICMP pings across all leaf nodes of a group with
+// bounded concurrency (large groups can hold 140+ nodes).
+func (m Model) testGroupProbe(group api.Group) tea.Cmd {
+	mode, ep := m.testMode, m.endpoints
+	nodes := append([]string(nil), group.All...)
+	name := group.Name
+	return func() tea.Msg {
+		result := make(api.GroupDelayResult, len(nodes))
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, probeConcurrency)
+		for _, n := range nodes {
+			if _, ok := ep.Lookup(n); !ok {
+				continue // sub-group or unknown server; skip
+			}
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(n string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				d, _ := probePing(ep, mode, n)
+				mu.Lock()
+				result[n] = d
+				mu.Unlock()
+			}(n)
+		}
+		wg.Wait()
+		return messages.GroupDelayMsg{Group: name, Result: result}
+	}
+}
+
+func probePing(ep *probe.Endpoints, mode probe.Mode, name string) (int, error) {
+	if ep == nil {
+		return 0, fmt.Errorf("no endpoints loaded")
+	}
+	e, ok := ep.Lookup(name)
+	if !ok {
+		return 0, fmt.Errorf("unknown server for %s", name)
+	}
+	switch mode {
+	case probe.ModeTCP:
+		return probe.TCPPing(e.Server, e.Port, probeTimeout)
+	case probe.ModeICMP:
+		return probe.ICMPPing(e.Server, probeTimeout)
+	}
+	return 0, fmt.Errorf("not a probe mode")
+}
+
+// unfixGroup clears a URLTest/Fallback group's fixed node, then refetches.
+func (m Model) unfixGroup(name string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.client.UnfixProxy(name); err != nil {
+			return messages.ProxySelectedMsg{Group: name, Err: err}
+		}
+		groups, gerr := m.client.GetGroups()
+		return messages.GroupsMsg{Groups: groups, Err: gerr}
 	}
 }

@@ -22,6 +22,8 @@ type Group struct {
 	Type    string         `json:"type"`
 	Now     string         `json:"now"`
 	All     []string       `json:"all"`
+	TestURL string         `json:"testUrl,omitempty"`
+	Fixed   string         `json:"fixed,omitempty"`
 	History []DelayHistory `json:"history,omitempty"`
 	Hidden  bool           `json:"hidden,omitempty"`
 }

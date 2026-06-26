@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"echo \\\"=== full mihomo cmdline ===\\\"\\nps -o command= -p 47681 2>/dev/null | tr ' ' '\\\\n' | grep -A1 -E '^-d$|^-f$' \\necho \\\"\\\"\\nCFG=\\\"/Users/cdcd/Library/Application Support/io.github.clas...",
+  "error": "Exit code 1\n=== full mihomo cmdline ===\n-d\n/Users/cdcd/Library/Application\n--\n-f\n/Users/cdcd/Library/Application\n\n=== config readable? ===\n.\u001b[1;33mr\u001b[31mw\u001b[90m-\u001b[0m\u001b[33mr\u001b[1;90m--\u001b[0m\u001b[33mr\u001b[1;90m--\u001b\n=== proxies sample (name/type/server/port) ===\nTraceback (most recent call last):\n  File \u001b[35m\"<stdin>\"\u001b[0m, line \u001b[35m1\u001b[0m, in \u001b[35m<module>\u001b[0m\n\u001b[1;35mModuleNotFoundError\u001b[0m: \u001b[35mNo module named 'yaml'\u001b[0m",
+  "timestamp": "2026-06-26T03:04:17.576Z",
+  "retry_count": 1
+}

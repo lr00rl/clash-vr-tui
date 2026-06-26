@@ -52,6 +52,12 @@ func (c *Client) SelectProxy(group, proxy string) error {
 	return err
 }
 
+// UnfixProxy clears a fixed selection for a URLTest/Fallback group, restoring
+// automatic selection (DELETE /proxies/{group}).
+func (c *Client) UnfixProxy(group string) error {
+	return c.delete("/proxies/" + url.PathEscape(group))
+}
+
 // TestGroupDelay tests delay for all nodes in a group.
 func (c *Client) TestGroupDelay(group string, testURL string, timeout int) (GroupDelayResult, error) {
 	if testURL == "" {
