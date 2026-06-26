@@ -12,6 +12,7 @@ import (
 	"github.com/cdcd/clash-vr-tui/internal/ui/connections"
 	"github.com/cdcd/clash-vr-tui/internal/ui/helpbar"
 	"github.com/cdcd/clash-vr-tui/internal/ui/home"
+	"github.com/cdcd/clash-vr-tui/internal/ui/logs"
 	"github.com/cdcd/clash-vr-tui/internal/ui/overlay"
 	"github.com/cdcd/clash-vr-tui/internal/ui/proxies"
 	"github.com/cdcd/clash-vr-tui/internal/ui/rules"
@@ -32,6 +33,7 @@ type Model struct {
 	proxies     proxies.Model
 	connections connections.Model
 	rules       rules.Model
+	logs        logs.Model
 	settings    settings.Model
 
 	// State
@@ -39,6 +41,8 @@ type Model struct {
 	client        *api.Client
 	trafficCancel context.CancelFunc
 	connsCancel   context.CancelFunc
+	logsCancel    context.CancelFunc
+	logsStarted   bool
 	width         int
 	height        int
 	ready         bool
@@ -61,6 +65,7 @@ func NewModel(client *api.Client) Model {
 		proxies:     proxies.New(client),
 		connections: connections.New(client),
 		rules:       rules.New(client),
+		logs:        logs.New(),
 		settings:    settings.New(client),
 		activePage:  messages.PageHome,
 		client:      client,
@@ -78,13 +83,37 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-// cancelAll cancels both WebSocket stream contexts.
+// cancelAll cancels all WebSocket stream contexts.
 func (m *Model) cancelAll() {
 	if m.trafficCancel != nil {
 		m.trafficCancel()
 	}
 	if m.connsCancel != nil {
 		m.connsCancel()
+	}
+	if m.logsCancel != nil {
+		m.logsCancel()
+	}
+}
+
+func (m Model) startLogsStream() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := make(chan api.LogEntry, 64)
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- m.client.StreamLogs(ctx, "debug", ch)
+		}()
+		select {
+		case entry := <-ch:
+			return logsStarted{cancel: cancel, ch: ch, first: entry}
+		case err := <-errCh:
+			cancel()
+			return logsDown{err: fmt.Errorf("logs stream: %w", err)}
+		case <-time.After(10 * time.Second):
+			cancel()
+			return logsDown{err: fmt.Errorf("logs stream: connection timeout")}
+		}
 	}
 }
 
@@ -153,6 +182,17 @@ type connsTick struct {
 	data api.ConnectionsSnapshot
 }
 
+type logsStarted struct {
+	cancel context.CancelFunc
+	ch     <-chan api.LogEntry
+	first  api.LogEntry
+}
+
+type logsTick struct {
+	ch    <-chan api.LogEntry
+	entry api.LogEntry
+}
+
 func waitForTraffic(ch <-chan api.TrafficData) tea.Cmd {
 	return func() tea.Msg {
 		data, ok := <-ch
@@ -173,16 +213,28 @@ func waitForConns(ch <-chan api.ConnectionsSnapshot) tea.Cmd {
 	}
 }
 
+func waitForLogs(ch <-chan api.LogEntry) tea.Cmd {
+	return func() tea.Msg {
+		entry, ok := <-ch
+		if !ok {
+			return logsDown{err: fmt.Errorf("logs stream closed")}
+		}
+		return logsTick{ch: ch, entry: entry}
+	}
+}
+
 // --- Stream death / reconnect messages ---
 
-// trafficDown / connsDown signal that a stream ended (error or closed). The
-// root model schedules a reconnect after reconnectDelay.
+// trafficDown / connsDown / logsDown signal that a stream ended (error or
+// closed). The root model schedules a reconnect after reconnectDelay.
 type trafficDown struct{ err error }
 type connsDown struct{ err error }
+type logsDown struct{ err error }
 
-// trafficReconnect / connsReconnect fire after the backoff delay to re-dial.
+// *Reconnect messages fire after the backoff delay to re-dial.
 type trafficReconnect struct{}
 type connsReconnect struct{}
+type logsReconnect struct{}
 
 // clearStatus clears a transient status line if it is still the latest one.
 type clearStatus struct{ seq int }

@@ -29,6 +29,8 @@ func (m Model) View() string {
 		content = m.connections.View()
 	case messages.PageRules:
 		content = m.rules.View()
+	case messages.PageLogs:
+		content = m.logs.View()
 	case messages.PageSettings:
 		content = m.settings.View()
 	}

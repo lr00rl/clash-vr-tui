@@ -79,6 +79,13 @@ func pageBindings(page messages.Page) []Binding {
 			{Key: "g", Desc: "Top"},
 			{Key: "G", Desc: "Bottom"},
 		}
+	case messages.PageLogs:
+		return []Binding{
+			{Key: "space", Desc: "Pause"},
+			{Key: "l", Desc: "Level"},
+			{Key: "c", Desc: "Clear"},
+			{Key: "/", Desc: "Filter"},
+		}
 	case messages.PageSettings:
 		return []Binding{
 			{Key: "Enter", Desc: "Toggle"},

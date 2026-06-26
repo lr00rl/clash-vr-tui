@@ -152,6 +152,9 @@ func (m Model) ShowHelp() Model {
 		"Rules",
 		"  / Filter   g Top   G Bottom",
 		"",
+		"Logs",
+		"  space Pause   l Cycle level   c Clear   / Filter",
+		"",
 		"Settings",
 		"  Enter / Space   Toggle setting",
 	}, "\n")

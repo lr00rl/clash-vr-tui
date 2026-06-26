@@ -10,6 +10,7 @@ const (
 	PageProxies
 	PageConnections
 	PageRules
+	PageLogs
 	PageSettings
 )
 
@@ -23,6 +24,8 @@ func (p Page) String() string {
 		return "Conns"
 	case PageRules:
 		return "Rules"
+	case PageLogs:
+		return "Logs"
 	case PageSettings:
 		return "About"
 	default:
@@ -32,7 +35,7 @@ func (p Page) String() string {
 
 // Pages returns all pages in order.
 func Pages() []Page {
-	return []Page{PageHome, PageProxies, PageConnections, PageRules, PageSettings}
+	return []Page{PageHome, PageProxies, PageConnections, PageRules, PageLogs, PageSettings}
 }
 
 // --- Navigation messages ---

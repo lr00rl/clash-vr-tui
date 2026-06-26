@@ -82,6 +82,45 @@ func (c *Client) StreamConnections(ctx context.Context, ch chan<- ConnectionsSna
 	}
 }
 
+// StreamLogs opens a WebSocket to /logs and sends log entries on the channel.
+// level is the minimum level (debug returns everything for client-side filtering).
+func (c *Client) StreamLogs(ctx context.Context, level string, ch chan<- LogEntry) error {
+	if level == "" {
+		level = "debug"
+	}
+	conn, err := c.dialWS("/logs?level=" + level)
+	if err != nil {
+		return fmt.Errorf("ws /logs: %w", err)
+	}
+	defer conn.Close()
+	defer close(ch)
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return fmt.Errorf("read logs: %w", err)
+			}
+			var entry LogEntry
+			if err := json.Unmarshal(msg, &entry); err != nil {
+				continue
+			}
+			select {
+			case ch <- entry:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
+
 func (c *Client) dialWS(path string) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		NetDialContext: func(_ context.Context, _, _ string) (net.Conn, error) {

@@ -86,6 +86,12 @@ type TrafficData struct {
 	Down int64 `json:"down"`
 }
 
+// LogEntry is a single log line from WS /logs.
+type LogEntry struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+}
+
 // Rule represents a single rule entry.
 type Rule struct {
 	Type    string `json:"type"`

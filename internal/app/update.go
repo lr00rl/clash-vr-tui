@@ -101,6 +101,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.initPage(msg.Page); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		// Lazily start the logs stream the first time the Logs page is opened.
+		if msg.Page == messages.PageLogs && !m.logsStarted {
+			m.logsStarted = true
+			cmds = append(cmds, m.startLogsStream())
+		}
 
 	// --- WebSocket stream lifecycle ---
 	case trafficStarted:
@@ -141,6 +146,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connsReconnect:
 		cmds = append(cmds, m.startConnectionsStream())
 
+	case logsStarted:
+		m.logsCancel = msg.cancel
+		m.logs = m.logs.Add(msg.first)
+		cmds = append(cmds, waitForLogs(msg.ch))
+	case logsTick:
+		m.logs = m.logs.Add(msg.entry)
+		cmds = append(cmds, waitForLogs(msg.ch))
+	case logsDown:
+		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return logsReconnect{} }))
+	case logsReconnect:
+		if m.logsStarted {
+			cmds = append(cmds, m.startLogsStream())
+		}
+
 	case clearStatus:
 		if msg.seq == m.statusSeq {
 			m.statusbar = m.statusbar.SetStatus("", false)
@@ -172,6 +191,10 @@ func (m *Model) updateActivePage(msg tea.KeyMsg) tea.Cmd {
 	case messages.PageRules:
 		var cmd tea.Cmd
 		m.rules, cmd = m.rules.Update(msg)
+		return cmd
+	case messages.PageLogs:
+		var cmd tea.Cmd
+		m.logs, cmd = m.logs.Update(msg)
 		return cmd
 	case messages.PageSettings:
 		var cmd tea.Cmd
@@ -340,6 +363,7 @@ func (m Model) updateSizes() Model {
 	m.proxies = m.proxies.SetSize(contentW, contentH)
 	m.connections = m.connections.SetSize(contentW, contentH)
 	m.rules = m.rules.SetSize(contentW, contentH)
+	m.logs = m.logs.SetSize(contentW, contentH)
 	m.settings = m.settings.SetSize(contentW, contentH)
 
 	return m
@@ -363,6 +387,8 @@ func (m Model) isPageFiltering() bool {
 		return m.connections.Filtering()
 	case messages.PageRules:
 		return m.rules.Filtering()
+	case messages.PageLogs:
+		return m.logs.Filtering()
 	}
 	return false
 }
