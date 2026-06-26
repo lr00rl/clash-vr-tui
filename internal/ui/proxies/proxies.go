@@ -38,17 +38,10 @@ const (
 	focusNodes  = "nodes"
 
 	proxyPanelGap      = 1
-	groupPanelMinWidth = 34
-	groupPanelMaxWidth = 48
+	groupPanelMinWidth = 28
+	groupPanelMaxWidth = 42
 	panelChromeWidth   = 4
 	panelChromeHeight  = 2
-	cardOuterMinWidth  = 24
-	cardOuterMaxWidth  = 30
-	cardChromeWidth    = 4
-	cardOuterHeight    = 4
-	cardRowGap         = 1
-	cardColGap         = 2
-	groupRowMargin     = 2
 )
 
 type groupState struct {
@@ -323,31 +316,31 @@ func (m Model) renderHeaderLines() []string {
 	modes := []string{"rule", "global", "direct"}
 	tabs := make([]string, 0, len(modes))
 	for _, mode := range modes {
-		label := fmt.Sprintf("[%s%s]", strings.ToUpper(mode[:1]), mode[1:])
-		if mode == m.mode {
-			tabs = append(tabs, styles.ModeActive.Render(label))
-		} else {
-			tabs = append(tabs, styles.ModeInactive.Render(label))
-		}
+		label := strings.ToUpper(mode)
+		tabs = append(tabs, styles.Badge(label, mode == m.mode))
 	}
 
-	testInfo := fmt.Sprintf("[Test: %s]", m.testMode)
+	visible := m.visibleGroups()
+	nodeCount := len(m.currentNodes())
+	meta := fmt.Sprintf("%d groups  %d nodes  sort %s", len(visible), nodeCount, strings.ToLower(m.sortMode.String()))
+	testInfo := styles.Badge("PROBE "+strings.ToUpper(m.testMode.String()), true)
 	if m.testMode.NeedsEndpoints() {
 		if m.epErr != nil {
-			testInfo += styles.DelayBad.Render(" config?")
+			testInfo += " " + styles.StateBadge("CONFIG?", "bad")
 		} else if m.endpoints != nil {
-			testInfo += styles.DelayNone.Render(fmt.Sprintf(" %d nodes", m.endpoints.Len()))
+			testInfo += " " + styles.Faint.Render(fmt.Sprintf("%d endpoints", m.endpoints.Len()))
 		}
 	}
 
 	lines := []string{
-		"Mode: " + strings.Join(tabs, "  ") + fmt.Sprintf("    [Sort: %s]  %s  [Focus: %s]", m.sortMode.String(), testInfo, m.focus),
-		strings.Repeat("─", max(m.width-2, 0)),
+		styles.PageHeader("Proxy Matrix", meta, max(m.width-2, 20)),
+		strings.Join(tabs, " ") + "  " + testInfo + "  " + styles.Faint.Render("focus "+m.focus),
+		styles.Divider(max(m.width-2, 1)),
 	}
 	if m.filtering {
-		lines = append(lines, styles.FilterPrompt.Render("Filter: ")+m.filter+"█")
+		lines = append(lines, styles.FilterLine("Filter", m.filter, true))
 	} else if m.filter != "" {
-		lines = append(lines, styles.FilterPrompt.Render("Filter: ")+m.filter)
+		lines = append(lines, styles.FilterLine("Filter", m.filter, false))
 	}
 	return lines
 }
@@ -357,7 +350,7 @@ func (m Model) renderGroupsPanel(width, height int) string {
 	bodyH := max(height-panelChromeHeight, 1)
 	lines := make([]string, 0, bodyH+1)
 
-	title := fmt.Sprintf("Groups (%d)", len(visible))
+	title := fmt.Sprintf(" Groups %d ", len(visible))
 	if m.focus == focusGroups {
 		title = styles.ProxyGroupHeaderSelected.Render(title)
 	} else {
@@ -365,31 +358,34 @@ func (m Model) renderGroupsPanel(width, height int) string {
 	}
 	lines = append(lines, title)
 
-	start := min(m.groupOffset, max(len(visible)-bodyH, 0))
-	end := min(start+bodyH, len(visible))
+	rows := max(bodyH-1, 1)
+	start := min(m.groupOffset, max(len(visible)-rows, 0))
+	end := min(start+rows, len(visible))
+	innerW := max(width-panelChromeWidth, 1)
+	rowW := max(innerW-1, 1)
 
 	for i := start; i < end; i++ {
 		g := m.groups[visible[i].index].group
 		prefix := "  "
 		if i == m.groupCursor {
-			prefix = "• "
+			prefix = "▸ "
 		}
 
-		now := truncateDisplayWidth(g.Now, max(width-groupRowMargin-18, 8))
-		line := prefix + truncateDisplayWidth(g.Name, max(width-20, 12))
-		meta := fmt.Sprintf("  %s  %d", g.Type, len(g.All))
-		raw := truncateDisplayWidth(line+meta, width-panelChromeWidth)
+		typeW := 8
+		countW := 4
+		nameW := max(rowW-lipgloss.Width(prefix)-typeW-countW-2, 8)
+		raw := prefix +
+			styles.PadRight(g.Name, nameW) + " " +
+			styles.PadRight(g.Type, typeW) +
+			styles.PadLeft(fmt.Sprintf("%d", len(g.All)), countW)
 		if i == m.groupCursor {
-			lines = append(lines, styles.TableRowSelected.Width(max(width-panelChromeWidth, 1)).Render(raw))
+			lines = append(lines, styles.TableRowSelected.Width(rowW).Render(raw))
 		} else {
-			lines = append(lines, styles.TableRow.Width(max(width-panelChromeWidth, 1)).Render(raw))
-		}
-		if i == m.groupCursor {
-			lines = append(lines, styles.DelayNone.Render("  now: "+now))
+			lines = append(lines, styles.TableRow.Width(rowW).Render(raw))
 		}
 	}
 
-	for len(lines) < bodyH+1 {
+	for len(lines) < bodyH {
 		lines = append(lines, "")
 	}
 
@@ -408,22 +404,19 @@ func (m Model) renderNodesPanel(width, height int) string {
 		if m.focus == focusNodes {
 			box = styles.ProxyGroupBoxSelected
 		}
-		return box.Width(max(width-panelChromeWidth, 1)).Height(bodyH).Render("Nodes\n\nNo proxy group")
+		return box.Width(max(width-panelChromeWidth, 1)).Height(bodyH).Render(
+			styles.PanelTitle("Nodes") + "\n" + styles.EmptyState("No proxy group", "Refresh after the core is available.", width-panelChromeWidth),
+		)
 	}
 
 	nodes := m.currentNodes()
-	titleText := fmt.Sprintf("%s  [%s]  now: %s", group.Name, group.Type, truncateDisplayWidth(group.Now, max(width-28, 8)))
+	titleText := fmt.Sprintf(" %s  %s  now %s ", group.Name, group.Type, truncateDisplayWidth(group.Now, max(width-28, 8)))
 	title := styles.ProxyGroupHeader.Render(titleText)
 	if m.focus == focusNodes {
 		title = styles.ProxyGroupHeaderSelected.Render(titleText)
 	}
 
-	gridBodyH := max(bodyH-1, 1)
-	gridLines := m.renderNodeGrid(width-panelChromeWidth, gridBodyH)
-	content := title
-	if len(gridLines) > 0 {
-		content += "\n" + strings.Join(gridLines, "\n")
-	}
+	content := title + "\n" + m.renderNodeTable(width-panelChromeWidth, max(bodyH-1, 1))
 
 	box := styles.ProxyGroupBox
 	if m.focus == focusNodes {
@@ -431,51 +424,43 @@ func (m Model) renderNodesPanel(width, height int) string {
 	}
 
 	if len(nodes) == 0 {
-		content = title + "\n\nNo nodes match the current filter."
+		content = title + "\n" + styles.EmptyState("No nodes match the current filter.", "Try a name or delay predicate such as delay<200.", width-panelChromeWidth)
 	}
 	return box.Width(max(width-panelChromeWidth, 1)).Height(bodyH).Render(content)
 }
 
-func (m Model) renderNodeGrid(innerWidth, bodyHeight int) []string {
+func (m Model) renderNodeTable(innerWidth, bodyHeight int) string {
 	nodes := m.currentNodes()
 	if len(nodes) == 0 {
-		return nil
+		return ""
 	}
 
-	cols, cardOuterW := gridLayout(innerWidth)
-	rowsPerPage := max((bodyHeight+cardRowGap)/(cardOuterHeight+cardRowGap), 1)
-	startRow := min(m.nodeOffset, max((len(nodes)+cols-1)/cols-rowsPerPage, 0))
-	startIdx := startRow * cols
+	tableW := max(innerWidth-6, 24)
+	headerH := 2
+	rows := max(bodyHeight-headerH-1, 1)
+	start := clamp(m.nodeOffset, 0, max(len(nodes)-rows, 0))
+	end := min(start+rows, len(nodes))
 
-	lines := make([]string, 0, bodyHeight)
-	for row := 0; row < rowsPerPage; row++ {
-		rowStart := startIdx + row*cols
-		if rowStart >= len(nodes) {
-			break
-		}
+	delayW := 9
+	stateW := 9
+	prefixW := 2
+	nameW := max(tableW-prefixW-delayW-stateW-3, 8)
+	colHeader := strings.Repeat(" ", prefixW) +
+		styles.PadRight("Node", nameW) + " " +
+		styles.PadLeft("Delay", delayW) + " " +
+		styles.PadRight("State", stateW)
 
-		cards := make([]string, 0, cols)
-		for col := 0; col < cols; col++ {
-			idx := rowStart + col
-			if idx >= len(nodes) {
-				break
-			}
-			cards = append(cards, m.renderProxyCard(nodes[idx], idx, cardOuterW))
-		}
-
-		lines = append(lines, splitLines(joinCardRow(cards))...)
-		if row < rowsPerPage-1 {
-			lines = append(lines, "")
-		}
+	lines := []string{styles.TableHeader.Render(colHeader), styles.Divider(tableW)}
+	for i := start; i < end; i++ {
+		lines = append(lines, m.renderNodeRow(nodes[i], i, nameW, delayW, stateW, tableW))
 	}
-
 	for len(lines) < bodyHeight {
 		lines = append(lines, "")
 	}
-	return lines[:bodyHeight]
+	return strings.Join(lines[:bodyHeight], "\n")
 }
 
-func (m Model) renderProxyCard(name string, idx, outerWidth int) string {
+func (m Model) renderNodeRow(name string, idx, nameW, delayW, stateW, innerWidth int) string {
 	group := m.selectedGroup()
 	delay := 0
 	current := ""
@@ -486,26 +471,31 @@ func (m Model) renderProxyCard(name string, idx, outerWidth int) string {
 		fixed = group.Fixed
 	}
 
-	innerWidth := max(outerWidth-cardChromeWidth, 8)
-	nameLine := truncateDisplayWidth(name, innerWidth)
-	status := "standby"
+	prefix := "  "
+	if m.focus == focusNodes && idx == m.nodeCursor {
+		prefix = "▸ "
+	}
+
+	state := styles.Faint.Render("ready")
 	if name == current {
-		status = "active"
+		state = styles.DelayFast.Render("active")
 	}
 	if name == fixed && fixed != "" {
-		status = "pinned"
+		state = styles.DelaySlow.Render("pinned")
 	}
-	delayLine := truncateDisplayWidth(status, max(innerWidth-10, 4)) + padLeft(styles.DelayStyle(delay).Render(styles.FormatDelay(delay)), 10)
+	delayText := styles.DelayStyle(delay).Render(styles.FormatDelay(delay))
+	line := prefix +
+		styles.PadRight(name, nameW) + " " +
+		lipgloss.NewStyle().Width(delayW).Align(lipgloss.Right).Render(delayText) + " " +
+		lipgloss.NewStyle().Width(stateW).Render(state)
 
-	cardStyle := styles.ProxyCard
-	if name == current {
-		cardStyle = styles.ProxyCardCurrent
-	}
 	if m.focus == focusNodes && idx == m.nodeCursor {
-		cardStyle = styles.ProxyCardSelected
+		return styles.TableRowSelected.Width(innerWidth).Render(line)
 	}
-
-	return cardStyle.Width(innerWidth).Height(2).Render(nameLine + "\n" + delayLine)
+	if name == current {
+		return styles.DelayFast.Render(line)
+	}
+	return styles.TableRow.Render(line)
 }
 
 func (m *Model) rebuildGroups(groups []api.Group) {
@@ -628,8 +618,7 @@ func (m *Model) moveNodeVertical(delta int) {
 	if len(nodes) == 0 {
 		return
 	}
-	cols, _ := gridLayout(m.nodeGridWidth())
-	m.nodeCursor = clamp(m.nodeCursor+delta*cols, 0, len(nodes)-1)
+	m.nodeCursor = clamp(m.nodeCursor+delta, 0, len(nodes)-1)
 }
 
 func (m *Model) clampSelection() {
@@ -642,12 +631,12 @@ func (m *Model) clampSelection() {
 }
 
 func (m *Model) adjustOffsets() {
-	groupBodyHeight := max(m.height-len(m.renderHeaderLines())-panelChromeHeight, 1)
+	groupBodyHeight := max(m.height-len(m.renderHeaderLines())-panelChromeHeight-1, 1)
 	if m.groupCursor < m.groupOffset {
 		m.groupOffset = m.groupCursor
 	}
-	if m.groupCursor >= m.groupOffset+max(groupBodyHeight/2, 1) {
-		m.groupOffset = m.groupCursor - max(groupBodyHeight/2, 1) + 1
+	if m.groupCursor >= m.groupOffset+groupBodyHeight {
+		m.groupOffset = m.groupCursor - groupBodyHeight + 1
 	}
 
 	nodes := m.currentNodes()
@@ -656,17 +645,15 @@ func (m *Model) adjustOffsets() {
 		return
 	}
 
-	cols, _ := gridLayout(m.nodeGridWidth())
-	rowsPerPage := max((max(m.height-len(m.renderHeaderLines())-panelChromeHeight-1, 1)+cardRowGap)/(cardOuterHeight+cardRowGap), 1)
-	cursorRow := m.nodeCursor / cols
-	if cursorRow < m.nodeOffset {
-		m.nodeOffset = cursorRow
+	rowsPerPage := max(m.height-len(m.renderHeaderLines())-panelChromeHeight-3, 1)
+	if m.nodeCursor < m.nodeOffset {
+		m.nodeOffset = m.nodeCursor
 	}
-	if cursorRow >= m.nodeOffset+rowsPerPage {
-		m.nodeOffset = cursorRow - rowsPerPage + 1
+	if m.nodeCursor >= m.nodeOffset+rowsPerPage {
+		m.nodeOffset = m.nodeCursor - rowsPerPage + 1
 	}
-	maxRowOffset := max((len(nodes)+cols-1)/cols-rowsPerPage, 0)
-	m.nodeOffset = clamp(m.nodeOffset, 0, maxRowOffset)
+	maxOffset := max(len(nodes)-rowsPerPage, 0)
+	m.nodeOffset = clamp(m.nodeOffset, 0, maxOffset)
 }
 
 func (m Model) panelWidths() (int, int) {
@@ -675,50 +662,6 @@ func (m Model) panelWidths() (int, int) {
 	groupW = clamp(groupW, groupPanelMinWidth, groupPanelMaxWidth)
 	nodeW := max(available-groupW, 24)
 	return groupW, nodeW
-}
-
-func (m Model) nodeGridWidth() int {
-	_, nodeW := m.panelWidths()
-	return max(nodeW-panelChromeWidth, 1)
-}
-
-func gridLayout(innerWidth int) (int, int) {
-	available := max(innerWidth, cardOuterMinWidth)
-	maxCols := max((available+cardColGap)/(cardOuterMinWidth+cardColGap), 1)
-	for cols := maxCols; cols >= 1; cols-- {
-		cardW := (available - (cols-1)*cardColGap) / cols
-		if cardW < cardOuterMinWidth {
-			continue
-		}
-		cardW = min(cardW, cardOuterMaxWidth)
-		return cols, cardW
-	}
-	return 1, min(available, cardOuterMaxWidth)
-}
-
-func joinCardRow(cards []string) string {
-	if len(cards) == 0 {
-		return ""
-	}
-	if len(cards) == 1 {
-		return cards[0]
-	}
-	parts := make([]string, 0, len(cards)*2-1)
-	gap := strings.Repeat(" ", cardColGap)
-	for i, card := range cards {
-		if i > 0 {
-			parts = append(parts, gap)
-		}
-		parts = append(parts, card)
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-}
-
-func splitLines(s string) []string {
-	if s == "" {
-		return []string{""}
-	}
-	return strings.Split(s, "\n")
 }
 
 func getDelay(name string, delays map[string]int) int {
@@ -784,11 +727,6 @@ func truncateDisplayWidth(s string, width int) string {
 		return strings.Repeat(".", width)
 	}
 	return runewidth.Truncate(s, width, "..")
-}
-
-func padLeft(s string, width int) string {
-	padding := max(width-lipgloss.Width(s), 0)
-	return strings.Repeat(" ", padding) + s
 }
 
 func clamp(v, low, high int) int {

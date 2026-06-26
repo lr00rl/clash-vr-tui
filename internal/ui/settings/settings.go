@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
 	"github.com/cdcd/clash-vr-tui/internal/messages"
@@ -13,6 +14,7 @@ import (
 
 type settingItem struct {
 	label   string
+	help    string
 	kind    string // "toggle", "select", "info"
 	getBool func(*api.Config) bool
 	getStr  func(*api.Config) string
@@ -36,26 +38,31 @@ func New(client *api.Client) Model {
 	items := []settingItem{
 		{
 			label:   "TUN Mode",
+			help:    "Route traffic through the core TUN stack",
 			kind:    "toggle",
 			getBool: func(c *api.Config) bool { return c.TUN.Enable },
 		},
 		{
 			label:   "Allow LAN",
+			help:    "Expose proxy ports to the local network",
 			kind:    "toggle",
 			getBool: func(c *api.Config) bool { return c.AllowLan },
 		},
 		{
 			label:  "Log Level",
+			help:   "Minimum verbosity emitted by mihomo",
 			kind:   "select",
 			getStr: func(c *api.Config) string { return c.LogLevel },
 		},
 		{
 			label:  "Mixed Port",
+			help:   "HTTP and SOCKS entrypoint",
 			kind:   "info",
 			getStr: func(c *api.Config) string { return fmt.Sprintf("%d", c.MixedPort) },
 		},
 		{
 			label:  "Mode",
+			help:   "Runtime routing mode",
 			kind:   "info",
 			getStr: func(c *api.Config) string { return c.Mode },
 		},
@@ -176,23 +183,16 @@ func (m Model) View() string {
 		return ""
 	}
 
-	boxW := m.width - 2
-	if boxW < 20 {
-		boxW = 20
-	}
+	width := max(m.width-2, 20)
 
 	var b strings.Builder
 
-	// System section
-	b.WriteString(styles.SectionTitle.Render("System") + "\n")
-	b.WriteString(strings.Repeat("─", boxW) + "\n")
+	b.WriteString(styles.PageHeader("Runtime Config", "Enter edit  Space toggle", width))
+	b.WriteString("\n")
+	b.WriteString(styles.Divider(width))
+	b.WriteString("\n\n")
 
 	for i, item := range m.items {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "❯ "
-		}
-
 		var value string
 		if m.config == nil {
 			value = "--"
@@ -200,20 +200,20 @@ func (m Model) View() string {
 			switch item.kind {
 			case "toggle":
 				if item.getBool(m.config) {
-					value = styles.ToggleOn.Render("[ON ]")
+					value = styles.StateBadge("ON", "ok")
 				} else {
-					value = styles.ToggleOff.Render("[OFF]")
+					value = styles.StateBadge("OFF", "")
 				}
 			case "select":
-				value = item.getStr(m.config)
+				value = styles.Badge(strings.ToUpper(item.getStr(m.config)), true)
 			case "info":
-				value = styles.HelpDesc.Render(item.getStr(m.config))
+				value = styles.Subtle.Render(item.getStr(m.config))
 			}
 		}
 
-		line := fmt.Sprintf("%s%-20s %s", prefix, item.label, value)
+		line := renderSettingRow(item, value, width, i == m.cursor)
 		if i == m.cursor {
-			b.WriteString(styles.TableRowSelected.Render(line))
+			b.WriteString(styles.TableRowSelected.Width(width).Render(line))
 		} else {
 			b.WriteString(styles.TableRow.Render(line))
 		}
@@ -222,25 +222,51 @@ func (m Model) View() string {
 
 	// Log level selector overlay
 	if m.selectingLevel {
-		b.WriteString("\n" + styles.SectionTitle.Render("Select Log Level") + "\n")
-		for i, level := range logLevels {
-			prefix := "  "
-			if i == m.levelCursor {
-				prefix = "❯ "
-			}
-			current := ""
-			if m.config != nil && m.config.LogLevel == level {
-				current = " (current)"
-			}
-			b.WriteString(fmt.Sprintf("%s%s%s\n", prefix, level, current))
-		}
+		b.WriteString("\n")
+		b.WriteString(styles.PanelStyle.Width(max(width-4, 1)).Render(
+			styles.PanelTitle("Log Level") + "\n" + m.renderLevelPicker(width-4),
+		))
+		b.WriteString("\n")
 	}
 
 	if m.err != nil {
-		b.WriteString("\n" + styles.DelayBad.Render(fmt.Sprintf("Error: %v", m.err)))
+		b.WriteString("\n" + styles.ErrorLine(m.err, width))
 	}
 
 	return b.String()
+}
+
+func renderSettingRow(item settingItem, value string, width int, selected bool) string {
+	prefix := "  "
+	if selected {
+		prefix = "▸ "
+	}
+	valueW := min(14, max(width/3, 6))
+	labelW := max(width-valueW-lipgloss.Width(prefix)-1, 4)
+	right := lipgloss.NewStyle().Width(valueW).Align(lipgloss.Right).Render(value)
+	top := prefix + styles.PadRight(item.label, labelW) + " " + right
+	help := strings.Repeat(" ", lipgloss.Width(prefix)) + styles.Faint.Render(styles.Fit(item.help, labelW))
+	return top + "\n" + help
+}
+
+func (m Model) renderLevelPicker(width int) string {
+	var lines []string
+	for i, level := range logLevels {
+		prefix := "  "
+		if i == m.levelCursor {
+			prefix = "▸ "
+		}
+		current := ""
+		if m.config != nil && m.config.LogLevel == level {
+			current = " current"
+		}
+		line := prefix + styles.PadRight(level, 10) + styles.Faint.Render(current)
+		if i == m.levelCursor {
+			line = styles.TableRowSelected.Width(max(width, 1)).Render(line)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) fetchConfig() tea.Cmd {

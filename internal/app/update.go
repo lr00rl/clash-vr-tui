@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cdcd/clash-vr-tui/internal/messages"
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 	"github.com/cdcd/clash-vr-tui/internal/ui/connections"
 )
 
@@ -350,21 +351,22 @@ func (m Model) initPage(page messages.Page) tea.Cmd {
 }
 
 func (m Model) updateSizes() Model {
-	sidebarW := 16
-	contentW := m.width - sidebarW
+	sidebarW := styles.SidebarWidth(m.width)
+	contentTotalW := max(m.width-sidebarW, 1)
+	contentInnerW := max(contentTotalW-2, 1)
 	contentH := m.height - 2 // status bar + help bar
 
-	m.sidebar = m.sidebar.SetHeight(contentH)
+	m.sidebar = m.sidebar.SetSize(sidebarW, contentH)
 	m.statusbar = m.statusbar.SetWidth(m.width)
 	m.helpbar = m.helpbar.SetWidth(m.width)
 	m.overlay = m.overlay.SetSize(m.width, m.height)
 
-	m.home = m.home.SetSize(contentW, contentH)
-	m.proxies = m.proxies.SetSize(contentW, contentH)
-	m.connections = m.connections.SetSize(contentW, contentH)
-	m.rules = m.rules.SetSize(contentW, contentH)
-	m.logs = m.logs.SetSize(contentW, contentH)
-	m.settings = m.settings.SetSize(contentW, contentH)
+	m.home = m.home.SetSize(contentInnerW, contentH)
+	m.proxies = m.proxies.SetSize(contentInnerW, contentH)
+	m.connections = m.connections.SetSize(contentInnerW, contentH)
+	m.rules = m.rules.SetSize(contentInnerW, contentH)
+	m.logs = m.logs.SetSize(contentInnerW, contentH)
+	m.settings = m.settings.SetSize(contentInnerW, contentH)
 
 	return m
 }

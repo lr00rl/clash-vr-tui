@@ -153,14 +153,15 @@ func (m Model) View() string {
 		return ""
 	}
 	var b strings.Builder
+	width := max(m.width-2, 20)
 	visible := m.visibleEntries()
 	maxRows := m.rows()
 	offset := clamp(m.offset, 0, max(len(visible)-maxRows, 0))
 	end := min(offset+maxRows, len(visible))
 
-	state := "live"
+	state := styles.StateBadge("LIVE", "ok")
 	if m.paused {
-		state = styles.DelaySlow.Render("paused")
+		state = styles.StateBadge("PAUSED", "warn")
 	}
 	lvl := m.level
 	if lvl == "" {
@@ -170,22 +171,28 @@ func (m Model) View() string {
 	if len(visible) > 0 {
 		pos = fmt.Sprintf("  %d-%d/%d", offset+1, end, len(visible))
 	}
-	header := fmt.Sprintf("Logs [%s]  level: %s  %s%s", state, lvl, "space pause · l level · c clear · / filter", pos)
-	b.WriteString(header + "\n")
+	meta := fmt.Sprintf("level %s  buffer %d/%d%s", lvl, len(m.entries), maxEntries, pos)
+	b.WriteString(styles.PageHeader("Logs", meta, width) + "\n")
+	b.WriteString(state + "  " + styles.Faint.Render("space pause  l level  c clear  / filter") + "\n")
 	if m.filtering {
-		b.WriteString(styles.FilterPrompt.Render("Filter: ") + m.filter + "█\n")
+		b.WriteString(styles.FilterLine("Filter", m.filter, true) + "\n")
 	} else if m.filter != "" {
-		b.WriteString(styles.FilterPrompt.Render("Filter: ") + m.filter + "\n")
+		b.WriteString(styles.FilterLine("Filter", m.filter, false) + "\n")
 	}
-	b.WriteString(strings.Repeat("─", max(m.width-2, 0)) + "\n")
+	b.WriteString(styles.Divider(width) + "\n")
+
+	if len(visible) == 0 {
+		b.WriteString(styles.EmptyState("No log entries", "Open the Logs page to start streaming, or clear filters.", width))
+		return b.String()
+	}
 
 	for i := offset; i < end; i++ {
 		e := visible[i]
 		tag := levelTag(e.Type)
-		payload := truncate(e.Payload, max(m.width-12, 8))
+		payload := truncate(e.Payload, max(width-12, 8))
 		line := tag + " " + payload
 		if i == m.cursor {
-			b.WriteString(styles.TableRowSelected.Render("❯ " + line))
+			b.WriteString(styles.TableRowSelected.Width(width).Render("▸ " + line))
 		} else {
 			b.WriteString("  " + line)
 		}

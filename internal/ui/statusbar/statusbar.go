@@ -34,17 +34,18 @@ func (m Model) SetStatus(text string, isErr bool) Model {
 }
 
 var (
-	statusInfoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	statusErrStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	memStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	statusInfoStyle = lipgloss.NewStyle().Foreground(styles.Secondary).Bold(true)
+	statusErrStyle  = lipgloss.NewStyle().Foreground(styles.Danger).Bold(true)
+	memStyle        = lipgloss.NewStyle().Foreground(styles.TextFaint)
 )
 
 func (m Model) View() string {
-	title := styles.StatusTitle.Render(" Clash Verge TUI")
+	innerW := max(m.width-2, 1)
+	title := styles.StatusTitle.Render(" clash-vr-tui")
 
-	up := styles.TrafficUp.Render(fmt.Sprintf("▲ %s", formatSpeed(m.Upload)))
-	down := styles.TrafficDown.Render(fmt.Sprintf("▼ %s", formatSpeed(m.Download)))
-	right := fmt.Sprintf("%s  %s", up, down)
+	up := styles.TrafficUp.Render(fmt.Sprintf("UP %s", formatSpeed(m.Upload)))
+	down := styles.TrafficDown.Render(fmt.Sprintf("DOWN %s", formatSpeed(m.Download)))
+	right := fmt.Sprintf("%s  %s", down, up)
 	if m.Memory > 0 {
 		right += "  " + memStyle.Render("MEM "+formatBytes(m.Memory))
 	}
@@ -52,7 +53,7 @@ func (m Model) View() string {
 	mid := ""
 	if m.status != "" {
 		// Truncate raw text (before styling) so ANSI codes stay intact.
-		maxMid := max(m.width-lipgloss.Width(title)-lipgloss.Width(right)-4, 0)
+		maxMid := max(innerW-lipgloss.Width(title)-lipgloss.Width(right)-4, 0)
 		text := truncate(m.status, maxMid)
 		if m.statusErr {
 			mid = statusErrStyle.Render(text)
@@ -61,7 +62,7 @@ func (m Model) View() string {
 		}
 	}
 
-	gap := max(m.width-lipgloss.Width(title)-lipgloss.Width(mid)-lipgloss.Width(right)-3, 1)
+	gap := max(innerW-lipgloss.Width(title)-lipgloss.Width(mid)-lipgloss.Width(right)-3, 1)
 
 	var body string
 	if mid == "" {
@@ -69,10 +70,10 @@ func (m Model) View() string {
 		body = title + padding + right
 	} else {
 		left := lipgloss.NewStyle().Width(gap).Render("")
-		body = title + " " + mid + left + right
+		body = title + " " + styles.Faint.Render("•") + " " + mid + left + right
 	}
 
-	return styles.StatusBar.Width(m.width).Render(body)
+	return styles.StatusBar.Width(innerW).Render(body)
 }
 
 func truncate(s string, maxLen int) string {

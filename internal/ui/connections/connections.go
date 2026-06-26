@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
@@ -297,6 +298,7 @@ func (m Model) View() string {
 	}
 
 	var b strings.Builder
+	width := max(m.width-2, 20)
 	hostW, dlW, ulW, chainW, ruleW := m.columnWidths()
 
 	// Header
@@ -312,28 +314,31 @@ func (m Model) View() string {
 	if m.filter != "" {
 		count = len(visible)
 	}
-	header := fmt.Sprintf("Connections (%d active)    Total ▼%s ▲%s    [Sort: %s]%s",
-		count,
-		formatBytes(m.totalDL),
-		formatBytes(m.totalUL),
-		m.sortField.String(),
-		pos,
+	meta := fmt.Sprintf("%d active  sort %s%s", count, strings.ToLower(m.sortField.String()), pos)
+	b.WriteString(styles.PageHeader("Connections", meta, width) + "\n")
+	b.WriteString(
+		styles.TrafficDown.Render("DOWN "+formatBytes(m.totalDL)) + "  " +
+			styles.TrafficUp.Render("UP "+formatBytes(m.totalUL)) + "\n",
 	)
-	b.WriteString(header + "\n")
 
 	// Filter
 	if m.filtering {
-		b.WriteString(styles.FilterPrompt.Render("Filter: ") + m.filter + "█\n")
+		b.WriteString(styles.FilterLine("Filter", m.filter, true) + "\n")
 	} else if m.filter != "" {
-		b.WriteString(styles.FilterPrompt.Render("Filter: ") + m.filter + "\n")
+		b.WriteString(styles.FilterLine("Filter", m.filter, false) + "\n")
 	}
 
 	// Column headers
-	b.WriteString(strings.Repeat("─", m.width-2) + "\n")
+	b.WriteString(styles.Divider(width) + "\n")
 	colFmt := fmt.Sprintf("%%-%ds %%%ds %%%ds  %%-%ds %%-%ds", hostW, dlW, ulW, chainW, ruleW)
 	colHeader := fmt.Sprintf(colFmt, "Host", "DL", "UL", "Chain", "Rule")
 	b.WriteString(styles.TableHeader.Render(colHeader) + "\n")
-	b.WriteString(strings.Repeat("─", m.width-2) + "\n")
+	b.WriteString(styles.Divider(width) + "\n")
+
+	if len(visible) == 0 {
+		b.WriteString(styles.EmptyState("No active connections", "Open traffic or clear the filter to see live sessions.", width))
+		return b.String()
+	}
 
 	// Rows (windowed by viewport offset)
 	for i := offset; i < end; i++ {
@@ -360,13 +365,13 @@ func (m Model) View() string {
 		// Build cells with display-width-aware padding so CJK hosts/chains stay
 		// aligned (fmt's %-Ns counts runes, not terminal cells).
 		line := padRight(host, hostW) + " " +
-			padLeft(formatSpeed(e.dlSpeed), dlW) + " " +
-			padLeft(formatSpeed(e.ulSpeed), ulW) + "  " +
+			lipgloss.NewStyle().Width(dlW).Align(lipgloss.Right).Render(styles.TrafficDown.Render(formatSpeed(e.dlSpeed))) + " " +
+			lipgloss.NewStyle().Width(ulW).Align(lipgloss.Right).Render(styles.TrafficUp.Render(formatSpeed(e.ulSpeed))) + "  " +
 			padRight(chain, chainW) + " " +
 			padRight(rule, ruleW)
 
 		if i == m.cursor {
-			b.WriteString(styles.TableRowSelected.Render("❯ " + line))
+			b.WriteString(styles.TableRowSelected.Width(width).Render("▸ " + line))
 		} else {
 			b.WriteString(styles.TableRow.Render("  " + line))
 		}
@@ -374,7 +379,7 @@ func (m Model) View() string {
 	}
 
 	if m.err != nil {
-		b.WriteString("\n" + styles.DelayBad.Render(fmt.Sprintf("Error: %v", m.err)))
+		b.WriteString("\n" + styles.ErrorLine(m.err, width))
 	}
 
 	return b.String()

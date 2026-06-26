@@ -3,6 +3,7 @@ package home
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -99,33 +100,65 @@ func (m Model) View() string {
 		return ""
 	}
 
-	// Account for the surrounding ContentStyle padding (2) and the section box
-	// border (2) so the rounded boxes never overflow and wrap.
-	boxW := m.width - 4
-	if boxW < 20 {
-		boxW = 20
+	width := max(m.width-2, 20)
+	online := m.version != nil && m.config != nil
+	meta := "waiting for mihomo"
+	if online {
+		meta = "controller online"
 	}
 
-	// --- Quick Controls ---
-	var tun, mode, lan string
+	header := styles.PageHeader("Core Cockpit", meta, width)
+	controls := m.renderControls(width)
+	core := m.renderCore(width)
+	system := m.renderSystem(width)
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		styles.Divider(width),
+		"",
+		controls,
+		"",
+		core,
+		"",
+		system,
+	)
+
+	if m.err != nil {
+		errMsg := styles.ErrorLine(m.err, width)
+		content = lipgloss.JoinVertical(lipgloss.Left, header, styles.Divider(width), "", errMsg, "", controls, "", core, "", system)
+	}
+
+	return content
+}
+
+func (m Model) renderControls(width int) string {
+	var tun, mode, lan, state string
 	if m.config != nil {
 		tun = renderToggle(m.config.TUN.Enable)
-		mode = styles.ModeActive.Render(fmt.Sprintf("[%s]", m.config.Mode))
 		lan = renderToggle(m.config.AllowLan)
+		mode = renderMode(m.config.Mode)
 	} else {
 		tun, mode, lan = dash(), dash(), dash()
 	}
-	controls := styles.SectionBorder.Width(boxW).Render(
-		styles.SectionTitle.Render("Quick Controls") + "\n" +
-			fmt.Sprintf(" TUN %s   Allow-LAN %s   Mode %s", tun, lan, mode) + "\n" +
-			styles.HelpDesc.Render(" t toggle TUN · m cycle mode · R restart core"),
-	)
-
-	// --- Core status ---
-	coreVer := valueOr(func() string { return m.version.Version }, m.version != nil)
-	status := styles.DelayBad.Render("● disconnected")
 	if m.version != nil && m.config != nil {
-		status = styles.DelayFast.Render("● connected")
+		state = styles.StateBadge("ONLINE", "ok")
+	} else {
+		state = styles.StateBadge("OFFLINE", "bad")
+	}
+
+	body := strings.Join([]string{
+		state + "  " + mode,
+		"tun " + tun + "   lan " + lan,
+		styles.Faint.Render("t toggle TUN  m cycle mode  R restart core"),
+	}, "\n")
+	return panel("Session Controls", body, width)
+}
+
+func (m Model) renderCore(width int) string {
+	coreVer := valueOr(func() string { return m.version.Version }, m.version != nil)
+	status := styles.DelayBad.Render("disconnected")
+	if m.version != nil && m.config != nil {
+		status = styles.DelayFast.Render("connected")
 	}
 	var proxyAddr, mixedPort, mode2 string
 	if m.config != nil {
@@ -135,35 +168,27 @@ func (m Model) View() string {
 	} else {
 		proxyAddr, mixedPort, mode2 = "--", "--", "--"
 	}
-	clashInfo := styles.SectionBorder.Width(boxW).Render(
-		styles.SectionTitle.Render("Core Status") + "\n" +
-			infoRow("Status", status) +
-			infoRow("Core Version", coreVer) +
-			infoRow("Mode", mode2) +
-			infoRow("Proxy Addr", proxyAddr) +
-			infoRow("Mixed Port", mixedPort) +
-			infoRow("Memory", formatBytes(m.memory)) +
-			infoRow("Active Conns", fmt.Sprintf("%d", m.activeConns)) +
-			infoRow("Rules Count", fmt.Sprintf("%d", m.ruleCount)) +
-			infoRow("TUI Uptime", formatDuration(time.Since(m.startTime))),
-	)
 
-	// --- System Info ---
-	sysInfo := styles.SectionBorder.Width(boxW).Render(
-		styles.SectionTitle.Render("System Info") + "\n" +
-			infoRow("OS", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)) +
-			infoRow("Socket", m.client.SocketPath()) +
-			infoRow("Go Version", runtime.Version()),
-	)
+	body := strings.Builder{}
+	body.WriteString(infoRow("Status", status))
+	body.WriteString(infoRow("Core", coreVer))
+	body.WriteString(infoRow("Mode", mode2))
+	body.WriteString(infoRow("Proxy", proxyAddr))
+	body.WriteString(infoRow("Mixed Port", mixedPort))
+	body.WriteString(infoRow("Memory", formatBytes(m.memory)))
+	body.WriteString(infoRow("Connections", fmt.Sprintf("%d active", m.activeConns)))
+	body.WriteString(infoRow("Rules", fmt.Sprintf("%d loaded", m.ruleCount)))
+	body.WriteString(infoRow("Session", formatDuration(time.Since(m.startTime))))
+	return panel("Runtime", strings.TrimRight(body.String(), "\n"), width)
+}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, controls, "", clashInfo, "", sysInfo)
-
-	if m.err != nil {
-		errMsg := styles.DelayBad.Render(fmt.Sprintf("Error: %v", m.err))
-		content = lipgloss.JoinVertical(lipgloss.Left, errMsg, "", content)
-	}
-
-	return content
+func (m Model) renderSystem(width int) string {
+	body := strings.Builder{}
+	body.WriteString(infoRow("Host", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)))
+	body.WriteString(infoRow("Endpoint", m.client.SocketPath()))
+	body.WriteString(infoRow("Go", runtime.Version()))
+	body.WriteString(styles.Faint.Render("Use CLI subcommands for scripts: status, proxies, nodes, switch, test, mode, restart."))
+	return panel("Environment", strings.TrimRight(body.String(), "\n"), width)
 }
 
 func (m Model) fetchConfig() tea.Cmd {
@@ -196,12 +221,21 @@ func (m Model) patchConfig(patch api.ConfigPatch) tea.Cmd {
 
 func renderToggle(on bool) string {
 	if on {
-		return styles.ToggleOn.Render("[ON ]")
+		return styles.ToggleOn.Render("ON")
 	}
-	return styles.ToggleOff.Render("[OFF]")
+	return styles.ToggleOff.Render("OFF")
 }
 
-func dash() string { return styles.ToggleOff.Render("[--]") }
+func renderMode(mode string) string {
+	modes := []string{"rule", "global", "direct"}
+	var parts []string
+	for _, item := range modes {
+		parts = append(parts, styles.Badge(strings.ToUpper(item), item == mode))
+	}
+	return strings.Join(parts, " ")
+}
+
+func dash() string { return styles.ToggleOff.Render("--") }
 
 func valueOr(get func() string, ok bool) string {
 	if ok {
@@ -211,7 +245,7 @@ func valueOr(get func() string, ok bool) string {
 }
 
 func infoRow(label, value string) string {
-	return fmt.Sprintf(" %-14s %s\n", label, value)
+	return styles.MetricLabel.Render(styles.PadRight(label, 13)) + " " + value + "\n"
 }
 
 func cycleMode(current string) string {
@@ -243,4 +277,11 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+func panel(title, body string, width int) string {
+	inner := max(width-4, 1)
+	return styles.PanelStyle.Width(inner).Render(
+		styles.PanelTitle(title) + "\n" + body,
+	)
 }

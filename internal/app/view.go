@@ -1,7 +1,10 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cdcd/clash-vr-tui/internal/messages"
 	"github.com/cdcd/clash-vr-tui/internal/styles"
@@ -9,7 +12,9 @@ import (
 
 func (m Model) View() string {
 	if !m.ready {
-		return "  Starting Clash Verge TUI...\n  Connecting to mihomo at " + m.client.SocketPath() + "..."
+		return styles.StatusTitle.Render(" clash-vr-tui") + "\n" +
+			styles.Subtle.Render(" starting controller session") + "\n" +
+			styles.Faint.Render(" endpoint: "+m.client.SocketPath())
 	}
 
 	// Top status bar
@@ -35,14 +40,19 @@ func (m Model) View() string {
 		content = m.settings.View()
 	}
 
-	contentW := m.width - 16
+	sidebarW := styles.SidebarWidth(m.width)
+	contentTotalW := max(m.width-sidebarW, 1)
+	contentInnerW := max(contentTotalW-2, 1)
+	contentH := max(m.height-2, 1)
+	content = constrainView(content, contentInnerW, contentH)
 	contentStyled := styles.ContentStyle.
-		Width(contentW).
-		Height(m.height - 2).
+		Width(contentInnerW).
+		Height(contentH).
 		Render(content)
 
 	// Join sidebar + content
 	middle := lipgloss.JoinHorizontal(lipgloss.Top, side, contentStyled)
+	middle = constrainView(middle, m.width, contentH)
 
 	// Bottom help bar
 	bottom := m.helpbar.View(m.activePage)
@@ -55,5 +65,21 @@ func (m Model) View() string {
 		return m.overlay.View()
 	}
 
-	return view
+	return constrainView(view, max(m.width-1, 1), m.height)
+}
+
+func constrainView(s string, width, height int) string {
+	if height <= 0 || width <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
 }

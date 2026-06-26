@@ -78,20 +78,26 @@ func (m Model) View() string {
 	}
 
 	maxW := m.width * 3 / 4
-	if maxW < 40 {
-		maxW = 40
+	if maxW < 36 {
+		maxW = 36
+	}
+	if maxW > m.width-4 {
+		maxW = max(m.width-4, 20)
 	}
 	maxH := m.height * 3 / 4
 	if maxH < 10 {
 		maxH = 10
 	}
+	if maxH > m.height-2 {
+		maxH = max(m.height-2, 6)
+	}
 
-	title := styles.SectionTitle.Render(m.Title)
+	title := styles.PageHeader(m.Title, "Esc close", maxW-4)
 
 	var body string
 	switch m.Active {
 	case TypeConfirm:
-		body = m.Content + "\n\n" + styles.HelpKey.Render("[y]") + " Yes  " + styles.HelpKey.Render("[n]") + " No"
+		body = m.Content + "\n\n" + styles.KeyHint("y", "confirm") + "  " + styles.KeyHint("n", "cancel")
 	default:
 		body = m.Content
 	}
@@ -104,7 +110,7 @@ func (m Model) View() string {
 	}
 	body = strings.Join(lines, "\n")
 
-	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
+	content := lipgloss.JoinVertical(lipgloss.Left, title, styles.Divider(maxW-4), body)
 
 	box := styles.OverlayStyle.
 		MaxWidth(maxW).
@@ -123,40 +129,39 @@ func (m Model) ShowHelp() Model {
 	m.Title = "Keyboard Shortcuts"
 	m.Content = strings.Join([]string{
 		"Navigation",
-		"  Tab / Shift+Tab    Next / Previous page",
-		"  1-5                Jump to page by number",
-		"  q / Ctrl+C         Quit",
-		"  ?                  Toggle this help",
-		"  r                  Refresh current page",
-		"  R                  Restart mihomo core",
-		"  Esc                Close filter / overlay",
+		"  Tab / Shift+Tab    next / previous page",
+		"  1-6                jump to page",
+		"  q / Ctrl+C         quit",
+		"  ?                  show this help",
+		"  r                  refresh current page",
+		"  R                  restart mihomo core",
+		"  Esc                close filter / overlay",
 		"",
 		"Home",
-		"  t    Toggle TUN mode (core flag)",
-		"  m    Cycle mode (rule → global → direct)",
+		"  t    toggle TUN mode",
+		"  m    cycle mode: rule -> global -> direct",
 		"",
 		"Proxies",
-		"  ← → / h l   Switch panel (groups ↔ nodes)",
-		"  ↑ ↓ / j k   Move within panel",
-		"  Enter       Select node / focus nodes",
-		"  d           Delay test (group or node)",
-		"  D           Delay test single node",
-		"  T           Cycle test mode (HTTP / TCP / ICMP)",
-		"  u           Unpin URLTest/Fallback group (auto)",
-		"  o           Cycle sort (default → name → delay)",
-		"  /           Filter (name, or delay<200 / delay>500 / delay=timeout)",
+		"  left/right or h/l  switch groups / nodes",
+		"  up/down or j/k     move selection",
+		"  Enter              select node / focus nodes",
+		"  d / D              test group or selected node",
+		"  T                  HTTP / TCP / ICMP probe mode",
+		"  u                  unpin URLTest/Fallback back to auto",
+		"  o                  sort default / name / delay",
+		"  /                  filter name or delay<200 / delay>500 / delay=timeout",
 		"",
 		"Connections",
-		"  / Filter   Enter Detail   x Close   X Close all   s Sort",
+		"  / filter   Enter detail   x close   X close all   s sort",
 		"",
 		"Rules",
-		"  / Filter   g Top   G Bottom",
+		"  / filter   g top   G bottom",
 		"",
 		"Logs",
-		"  space Pause   l Cycle level   c Clear   / Filter",
+		"  space pause   l level   c clear   / filter",
 		"",
-		"Settings",
-		"  Enter / Space   Toggle setting",
+		"Config",
+		"  Enter / Space   toggle or edit selected setting",
 	}, "\n")
 	return m
 }

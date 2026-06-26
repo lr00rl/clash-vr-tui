@@ -105,10 +105,7 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) adjustViewport() {
-	maxRows := m.height - 5
-	if maxRows < 1 {
-		maxRows = 1
-	}
+	maxRows := m.rows()
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
@@ -117,35 +114,56 @@ func (m *Model) adjustViewport() {
 	}
 }
 
+func (m Model) rows() int {
+	maxRows := m.height - 6
+	if m.filtering || m.filter != "" {
+		maxRows--
+	}
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	return maxRows
+}
+
 func (m Model) View() string {
 	if m.width == 0 {
 		return ""
 	}
 
 	var b strings.Builder
+	width := max(m.width-2, 20)
 
 	visible := m.visibleRules()
+	meta := fmt.Sprintf("%d shown  %d total", len(visible), len(m.rules))
 
 	// Header
-	b.WriteString(fmt.Sprintf("Rules (%d)", len(visible)))
-	if m.filtering {
-		b.WriteString("   " + styles.FilterPrompt.Render("Filter: ") + m.filter + "█")
-	} else if m.filter != "" {
-		b.WriteString("   " + styles.FilterPrompt.Render("Filter: ") + m.filter)
-	}
+	b.WriteString(styles.PageHeader("Rules", meta, width))
 	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", m.width-2) + "\n")
+	if m.filtering {
+		b.WriteString(styles.FilterLine("Filter", m.filter, true))
+		b.WriteString("\n")
+	} else if m.filter != "" {
+		b.WriteString(styles.FilterLine("Filter", m.filter, false))
+		b.WriteString("\n")
+	}
+	b.WriteString(styles.Divider(width) + "\n")
 
 	// Column headers
-	colHeader := fmt.Sprintf("%-6s %-18s %-28s %s", "#", "Type", "Payload", "Proxy")
+	idxW, typeW, payloadW, proxyW := m.columnWidths(width)
+	colHeader := styles.PadRight("#", idxW) + " " +
+		styles.PadRight("Type", typeW) + " " +
+		styles.PadRight("Payload", payloadW) + " " +
+		styles.PadRight("Proxy", proxyW)
 	b.WriteString(styles.TableHeader.Render(colHeader) + "\n")
-	b.WriteString(strings.Repeat("─", m.width-2) + "\n")
+	b.WriteString(styles.Divider(width) + "\n")
+
+	if len(visible) == 0 {
+		b.WriteString(styles.EmptyState("No matching rules", "Clear the filter or search by type, payload, or proxy.", width))
+		return b.String()
+	}
 
 	// Rows
-	maxRows := m.height - 5
-	if maxRows < 1 {
-		maxRows = 1
-	}
+	maxRows := m.rows()
 
 	end := m.offset + maxRows
 	if end > len(visible) {
@@ -155,19 +173,13 @@ func (m Model) View() string {
 	for i := m.offset; i < end; i++ {
 		rule := visible[i]
 
-		payload := rule.Payload
-		if len(payload) > 26 {
-			payload = payload[:26] + ".."
-		}
-		proxy := rule.Proxy
-		if len(proxy) > 14 {
-			proxy = proxy[:14] + ".."
-		}
-
-		line := fmt.Sprintf("%-6d %-18s %-28s %s", i+1, rule.Type, payload, proxy)
+		line := styles.PadRight(fmt.Sprintf("%d", i+1), idxW) + " " +
+			styles.PadRight(rule.Type, typeW) + " " +
+			styles.PadRight(rule.Payload, payloadW) + " " +
+			styles.PadRight(rule.Proxy, proxyW)
 
 		if i == m.cursor {
-			b.WriteString(styles.TableRowSelected.Render("❯ " + line))
+			b.WriteString(styles.TableRowSelected.Width(width).Render("▸ " + line))
 		} else {
 			b.WriteString(styles.TableRow.Render("  " + line))
 		}
@@ -175,10 +187,32 @@ func (m Model) View() string {
 	}
 
 	if m.err != nil {
-		b.WriteString("\n" + styles.DelayBad.Render(fmt.Sprintf("Error: %v", m.err)))
+		b.WriteString("\n" + styles.ErrorLine(m.err, width))
 	}
 
 	return b.String()
+}
+
+func (m Model) columnWidths(width int) (int, int, int, int) {
+	tableW := max(width-2, 12)
+	idxW := min(5, max(tableW/10, 3))
+	typeW := min(18, max(tableW/5, 5))
+	proxyW := min(18, max(tableW/5, 5))
+	payloadW := tableW - idxW - typeW - proxyW - 3
+	for payloadW < 4 && (proxyW > 5 || typeW > 5) {
+		if proxyW > 5 {
+			proxyW--
+		}
+		if payloadW = tableW - idxW - typeW - proxyW - 3; payloadW >= 4 {
+			break
+		}
+		if typeW > 5 {
+			typeW--
+		}
+		payloadW = tableW - idxW - typeW - proxyW - 3
+	}
+	payloadW = max(payloadW, 4)
+	return idxW, typeW, payloadW, proxyW
 }
 
 func (m Model) visibleRules() []api.Rule {

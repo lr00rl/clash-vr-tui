@@ -27,7 +27,7 @@ func (p Page) String() string {
 	case PageLogs:
 		return "Logs"
 	case PageSettings:
-		return "About"
+		return "Config"
 	default:
 		return "Unknown"
 	}

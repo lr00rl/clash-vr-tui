@@ -3,6 +3,8 @@ package helpbar
 import (
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/cdcd/clash-vr-tui/internal/messages"
 	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
@@ -28,24 +30,24 @@ func (m Model) SetWidth(w int) Model {
 func (m Model) View(page messages.Page) string {
 	bindings := globalBindings()
 	bindings = append(bindings, pageBindings(page)...)
+	innerW := max(m.width-2, 1)
 
 	var parts []string
 	for _, b := range bindings {
-		parts = append(parts,
-			styles.HelpKey.Render(b.Key)+styles.HelpDesc.Render(":"+b.Desc),
-		)
+		parts = append(parts, styles.KeyHint(b.Key, b.Desc))
 	}
 
-	content := strings.Join(parts, "  ")
-	return styles.HelpBar.Width(m.width).Render(content)
+	content := joinWithin(parts, innerW)
+	return styles.HelpBar.Width(innerW).Render(content)
 }
 
 func globalBindings() []Binding {
 	return []Binding{
-		{Key: "q", Desc: "Quit"},
-		{Key: "Tab", Desc: "Next"},
-		{Key: "?", Desc: "Help"},
-		{Key: "r", Desc: "Refresh"},
+		{Key: "q", Desc: "quit"},
+		{Key: "Tab", Desc: "page"},
+		{Key: "?", Desc: "keys"},
+		{Key: "r", Desc: "refresh"},
+		{Key: "R", Desc: "restart"},
 	}
 }
 
@@ -54,42 +56,54 @@ func pageBindings(page messages.Page) []Binding {
 	case messages.PageHome:
 		return []Binding{
 			{Key: "t", Desc: "TUN"},
-			{Key: "m", Desc: "Mode"},
+			{Key: "m", Desc: "mode"},
 		}
 	case messages.PageProxies:
 		return []Binding{
-			{Key: "←→", Desc: "Panel"},
-			{Key: "Enter", Desc: "Select"},
-			{Key: "d", Desc: "Test"},
-			{Key: "T", Desc: "Mode"},
-			{Key: "o", Desc: "Sort"},
-			{Key: "u", Desc: "Unpin"},
-			{Key: "/", Desc: "Filter"},
+			{Key: "←→", Desc: "panel"},
+			{Key: "Enter", Desc: "select"},
+			{Key: "d", Desc: "test"},
+			{Key: "T", Desc: "probe"},
+			{Key: "o", Desc: "sort"},
+			{Key: "u", Desc: "auto"},
+			{Key: "/", Desc: "filter"},
 		}
 	case messages.PageConnections:
 		return []Binding{
-			{Key: "/", Desc: "Filter"},
-			{Key: "Enter", Desc: "Detail"},
-			{Key: "x", Desc: "Close"},
-			{Key: "s", Desc: "Sort"},
+			{Key: "/", Desc: "filter"},
+			{Key: "Enter", Desc: "detail"},
+			{Key: "x", Desc: "close"},
+			{Key: "X", Desc: "close all"},
+			{Key: "s", Desc: "sort"},
 		}
 	case messages.PageRules:
 		return []Binding{
-			{Key: "/", Desc: "Filter"},
-			{Key: "g", Desc: "Top"},
-			{Key: "G", Desc: "Bottom"},
+			{Key: "/", Desc: "filter"},
+			{Key: "g", Desc: "top"},
+			{Key: "G", Desc: "bottom"},
 		}
 	case messages.PageLogs:
 		return []Binding{
-			{Key: "space", Desc: "Pause"},
-			{Key: "l", Desc: "Level"},
-			{Key: "c", Desc: "Clear"},
-			{Key: "/", Desc: "Filter"},
+			{Key: "space", Desc: "pause"},
+			{Key: "l", Desc: "level"},
+			{Key: "c", Desc: "clear"},
+			{Key: "/", Desc: "filter"},
 		}
 	case messages.PageSettings:
 		return []Binding{
-			{Key: "Enter", Desc: "Toggle"},
+			{Key: "Enter", Desc: "edit"},
 		}
 	}
 	return nil
+}
+
+func joinWithin(parts []string, width int) string {
+	for len(parts) > 0 {
+		content := strings.Join(parts, "  ")
+		if lipgloss.Width(content) <= width {
+			return content
+		}
+		parts = parts[:len(parts)-1]
+	}
+	return ""
 }
