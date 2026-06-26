@@ -31,6 +31,15 @@ type Endpoints struct {
 	srcPath string
 }
 
+// defaultConfigPath, when set, is used as a fallback before auto-detection.
+var defaultConfigPath string
+
+// SetDefaultConfigPath sets an explicit mihomo config path to use for TCP/ICMP
+// server lookup (overrides auto-detection). Called from config resolution.
+func SetDefaultConfigPath(path string) {
+	defaultConfigPath = path
+}
+
 // NewEndpoints returns an empty endpoint cache.
 func NewEndpoints() *Endpoints {
 	return &Endpoints{byName: map[string]Endpoint{}}
@@ -63,10 +72,13 @@ func (e *Endpoints) Source() string {
 func (e *Endpoints) Load(configPath string) error {
 	path := configPath
 	if path == "" {
+		path = defaultConfigPath
+	}
+	if path == "" {
 		path = locateConfig()
 	}
 	if path == "" {
-		return fmt.Errorf("could not locate running mihomo config (set one explicitly for TCP/ICMP tests)")
+		return fmt.Errorf("could not locate running mihomo config (set config-path for TCP/ICMP tests)")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

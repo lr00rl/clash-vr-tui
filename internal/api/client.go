@@ -12,34 +12,53 @@ import (
 	"time"
 )
 
-// Client communicates with mihomo core over a Unix socket.
-type Client struct {
-	http       *http.Client
-	socketPath string
-	baseURL    string
+// Endpoint describes how to reach the mihomo controller: either a Unix socket
+// (clash-verge default) or a TCP external-controller (host:port + optional
+// secret), which also enables SSH-tunneled and plain-mihomo setups.
+type Endpoint struct {
+	Socket string // Unix socket path; takes precedence if set
+	Server string // host:port for an external controller
+	Secret string // bearer secret for the external controller
 }
 
-// NewClient creates a Client connected to the mihomo Unix socket.
+// Client communicates with the mihomo core over a Unix socket or TCP.
+type Client struct {
+	http    *http.Client
+	addr    string // socket path or host:port, for display
+	secret  string
+	baseURL string
+	wsBase  string
+	isUnix  bool
+}
+
+// NewClient creates a Client connected to a mihomo Unix socket.
 func NewClient(socketPath string) *Client {
+	return NewWith(Endpoint{Socket: socketPath})
+}
+
+// NewWith creates a Client from an Endpoint (Unix socket or TCP controller).
+func NewWith(ep Endpoint) *Client {
 	transport := &http.Transport{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			if runtime.GOOS == "windows" {
-				return net.Dial("unix", socketPath)
-			}
-			return net.Dial("unix", socketPath)
-		},
 		MaxIdleConns:    10,
 		IdleConnTimeout: 30 * time.Second,
 	}
-
-	return &Client{
-		http: &http.Client{
-			Transport: transport,
-			Timeout:   10 * time.Second,
-		},
-		socketPath: socketPath,
-		baseURL:    "http://localhost",
+	c := &Client{secret: ep.Secret}
+	if ep.Socket != "" {
+		socketPath := ep.Socket
+		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialControl(ctx, socketPath)
+		}
+		c.addr = socketPath
+		c.baseURL = "http://localhost"
+		c.wsBase = "ws://localhost"
+		c.isUnix = true
+	} else {
+		c.addr = ep.Server
+		c.baseURL = "http://" + ep.Server
+		c.wsBase = "ws://" + ep.Server
 	}
+	c.http = &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	return c
 }
 
 // DefaultSocketPath returns the platform-appropriate socket path.
@@ -50,13 +69,25 @@ func DefaultSocketPath() string {
 	return "/tmp/verge/verge-mihomo.sock"
 }
 
-// SocketPath returns the configured socket path.
+// SocketPath returns the configured address (socket path or host:port).
 func (c *Client) SocketPath() string {
-	return c.socketPath
+	return c.addr
+}
+
+// auth attaches the bearer secret to a request, if configured.
+func (c *Client) auth(req *http.Request) {
+	if c.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+c.secret)
+	}
 }
 
 func (c *Client) get(path string) ([]byte, error) {
-	resp, err := c.http.Get(c.baseURL + path)
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	c.auth(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}

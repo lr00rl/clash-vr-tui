@@ -122,13 +122,18 @@ func (c *Client) StreamLogs(ctx context.Context, level string, ch chan<- LogEntr
 }
 
 func (c *Client) dialWS(path string) (*websocket.Conn, error) {
-	dialer := websocket.Dialer{
-		NetDialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", c.socketPath)
-		},
-		Proxy: http.ProxyFromEnvironment,
+	dialer := websocket.Dialer{Proxy: http.ProxyFromEnvironment}
+	if c.isUnix {
+		sock := c.addr
+		dialer.NetDialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialControl(ctx, sock)
+		}
 	}
-	conn, _, err := dialer.Dial("ws://localhost"+path, nil)
+	var header http.Header
+	if c.secret != "" {
+		header = http.Header{"Authorization": []string{"Bearer " + c.secret}}
+	}
+	conn, _, err := dialer.Dial(c.wsBase+path, header)
 	if err != nil {
 		return nil, err
 	}

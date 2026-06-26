@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
+	"github.com/cdcd/clash-vr-tui/internal/config"
 )
 
 // commands is the set of recognized subcommands.
@@ -25,6 +26,8 @@ func IsCommand(s string) bool { return commands[s] }
 
 type options struct {
 	socket  string
+	server  string
+	secret  string
 	json    bool
 	url     string
 	timeout int
@@ -33,8 +36,8 @@ type options struct {
 
 // Maybe runs a subcommand if argv begins with one (after stripping flags).
 // Returns the process exit code and whether a subcommand was handled.
-func Maybe(argv []string, defaultSocket, version string) (int, bool) {
-	opts := options{socket: defaultSocket, timeout: 5000}
+func Maybe(argv []string, version string) (int, bool) {
+	opts := options{timeout: 5000}
 	var positional []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
@@ -48,6 +51,20 @@ func Maybe(argv []string, defaultSocket, version string) (int, bool) {
 			}
 		case strings.HasPrefix(a, "--socket="):
 			opts.socket = strings.TrimPrefix(a, "--socket=")
+		case a == "--server" || a == "-server":
+			if i+1 < len(argv) {
+				i++
+				opts.server = argv[i]
+			}
+		case strings.HasPrefix(a, "--server="):
+			opts.server = strings.TrimPrefix(a, "--server=")
+		case a == "--secret" || a == "-secret":
+			if i+1 < len(argv) {
+				i++
+				opts.secret = argv[i]
+			}
+		case strings.HasPrefix(a, "--secret="):
+			opts.secret = strings.TrimPrefix(a, "--secret=")
 		case a == "--url" || a == "-url":
 			if i+1 < len(argv) {
 				i++
@@ -76,7 +93,8 @@ func Maybe(argv []string, defaultSocket, version string) (int, bool) {
 }
 
 func run(cmd string, opts options, version string) int {
-	c := api.NewClient(opts.socket)
+	resolved := config.Resolve(config.Flags{Socket: opts.socket, Server: opts.server, Secret: opts.secret})
+	c := api.NewWith(resolved.Endpoint)
 	var err error
 	switch cmd {
 	case "help":
@@ -342,16 +360,22 @@ COMMANDS:
 
 GLOBAL FLAGS:
   --socket PATH    mihomo Unix socket (default: platform path)
+  --server H:P     external controller host:port (instead of socket)
+  --secret S       external controller secret
   --json           machine-readable JSON output
   --url URL        test URL (test command)
   --timeout MS     delay-test timeout in milliseconds
 
+Connection resolves from flags > env (CLASH_VR_TUI_SOCKET/_SERVER/_SECRET) >
+config file (%s) > defaults.
+
 EXAMPLES:
   clash-vr-tui status --json
-  clash-vr-tui switch Proxy 'JP-Tokyo-01'
-  clash-vr-tui test Proxy --timeout 3000
+  clash-vr-tui switch for-test-ip 'JP-Tokyo-01'
+  clash-vr-tui test for-test-ip --timeout 3000
   clash-vr-tui mode global
-`, version)
+  clash-vr-tui status --server 127.0.0.1:9090 --secret mypw
+`, version, config.Path())
 }
 
 func printJSON(v any) error {
