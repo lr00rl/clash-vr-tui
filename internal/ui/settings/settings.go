@@ -12,24 +12,24 @@ import (
 )
 
 type settingItem struct {
-	label    string
-	kind     string // "toggle", "select", "info"
-	getBool  func(*api.Config) bool
-	getStr   func(*api.Config) string
+	label   string
+	kind    string // "toggle", "select", "info"
+	getBool func(*api.Config) bool
+	getStr  func(*api.Config) string
 }
 
 var logLevels = []string{"debug", "info", "warning", "error", "silent"}
 
 type Model struct {
-	client          *api.Client
-	config          *api.Config
-	items           []settingItem
-	cursor          int
-	selectingLevel  bool
-	levelCursor     int
-	width           int
-	height          int
-	err             error
+	client         *api.Client
+	config         *api.Config
+	items          []settingItem
+	cursor         int
+	selectingLevel bool
+	levelCursor    int
+	width          int
+	height         int
+	err            error
 }
 
 func New(client *api.Client) Model {

@@ -28,8 +28,8 @@ func NewClient(socketPath string) *Client {
 			}
 			return net.Dial("unix", socketPath)
 		},
-		MaxIdleConns:       10,
-		IdleConnTimeout:    30 * time.Second,
+		MaxIdleConns:    10,
+		IdleConnTimeout: 30 * time.Second,
 	}
 
 	return &Client{

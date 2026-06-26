@@ -35,14 +35,21 @@ type Model struct {
 	settings    settings.Model
 
 	// State
-	activePage     messages.Page
-	client         *api.Client
-	trafficCancel  context.CancelFunc
-	connsCancel    context.CancelFunc
-	width          int
-	height         int
-	ready          bool
+	activePage    messages.Page
+	client        *api.Client
+	trafficCancel context.CancelFunc
+	connsCancel   context.CancelFunc
+	width         int
+	height        int
+	ready         bool
+	statusSeq     int
 }
+
+// Timing constants for stream reconnection and transient status messages.
+const (
+	reconnectDelay = 3 * time.Second
+	statusTTL      = 4 * time.Second
+)
 
 func NewModel(client *api.Client) Model {
 	return Model{
@@ -94,10 +101,10 @@ func (m Model) startTrafficStream() tea.Cmd {
 			return trafficStarted{cancel: cancel, ch: ch, first: data}
 		case err := <-errCh:
 			cancel()
-			return messages.ErrMsg{Err: fmt.Errorf("traffic stream: %w", err)}
+			return trafficDown{err: fmt.Errorf("traffic stream: %w", err)}
 		case <-time.After(10 * time.Second):
 			cancel()
-			return messages.ErrMsg{Err: fmt.Errorf("traffic stream: connection timeout")}
+			return trafficDown{err: fmt.Errorf("traffic stream: connection timeout")}
 		}
 	}
 }
@@ -115,10 +122,10 @@ func (m Model) startConnectionsStream() tea.Cmd {
 			return connsStarted{cancel: cancel, ch: ch, first: snap}
 		case err := <-errCh:
 			cancel()
-			return messages.ErrMsg{Err: fmt.Errorf("connections stream: %w", err)}
+			return connsDown{err: fmt.Errorf("connections stream: %w", err)}
 		case <-time.After(10 * time.Second):
 			cancel()
-			return messages.ErrMsg{Err: fmt.Errorf("connections stream: connection timeout")}
+			return connsDown{err: fmt.Errorf("connections stream: connection timeout")}
 		}
 	}
 }
@@ -150,7 +157,7 @@ func waitForTraffic(ch <-chan api.TrafficData) tea.Cmd {
 	return func() tea.Msg {
 		data, ok := <-ch
 		if !ok {
-			return messages.ErrMsg{Err: fmt.Errorf("traffic stream closed")}
+			return trafficDown{err: fmt.Errorf("traffic stream closed")}
 		}
 		return trafficTick{ch: ch, data: data}
 	}
@@ -160,8 +167,31 @@ func waitForConns(ch <-chan api.ConnectionsSnapshot) tea.Cmd {
 	return func() tea.Msg {
 		snap, ok := <-ch
 		if !ok {
-			return messages.ErrMsg{Err: fmt.Errorf("connections stream closed")}
+			return connsDown{err: fmt.Errorf("connections stream closed")}
 		}
 		return connsTick{ch: ch, data: snap}
 	}
+}
+
+// --- Stream death / reconnect messages ---
+
+// trafficDown / connsDown signal that a stream ended (error or closed). The
+// root model schedules a reconnect after reconnectDelay.
+type trafficDown struct{ err error }
+type connsDown struct{ err error }
+
+// trafficReconnect / connsReconnect fire after the backoff delay to re-dial.
+type trafficReconnect struct{}
+type connsReconnect struct{}
+
+// clearStatus clears a transient status line if it is still the latest one.
+type clearStatus struct{ seq int }
+
+// flash sets a transient status message and returns a command that clears it
+// after statusTTL (unless superseded by a newer flash).
+func (m *Model) flash(text string, isErr bool) tea.Cmd {
+	m.statusSeq++
+	seq := m.statusSeq
+	m.statusbar = m.statusbar.SetStatus(text, isErr)
+	return tea.Tick(statusTTL, func(time.Time) tea.Msg { return clearStatus{seq: seq} })
 }

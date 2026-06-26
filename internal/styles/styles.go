@@ -80,10 +80,7 @@ var (
 	// Table
 	TableHeader = lipgloss.NewStyle().
 			Foreground(Text).
-			Bold(true).
-			BorderBottom(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(Muted)
+			Bold(true)
 
 	TableRow = lipgloss.NewStyle().
 			Foreground(Text)
@@ -119,14 +116,14 @@ var (
 			Padding(0, 1).
 			Foreground(Text)
 
-	ProxyGroupBoxSelected = ProxyGroupBox.Copy().
+	ProxyGroupBoxSelected = ProxyGroupBox.
 				BorderForeground(Primary)
 
 	ProxyGroupHeader = lipgloss.NewStyle().
 				Foreground(Text).
 				Bold(true)
 
-	ProxyGroupHeaderSelected = ProxyGroupHeader.Copy().
+	ProxyGroupHeaderSelected = ProxyGroupHeader.
 					Foreground(Primary)
 
 	ProxyCard = lipgloss.NewStyle().
@@ -135,10 +132,10 @@ var (
 			Padding(0, 1).
 			Foreground(Text)
 
-	ProxyCardCurrent = ProxyCard.Copy().
+	ProxyCardCurrent = ProxyCard.
 				BorderForeground(Success)
 
-	ProxyCardSelected = ProxyCard.Copy().
+	ProxyCardSelected = ProxyCard.
 				BorderForeground(Primary).
 				Background(BgDark).
 				Bold(true)

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cdcd/clash-vr-tui/internal/messages"
@@ -19,76 +21,76 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Overlay intercepts all keys when active
+		// Overlay intercepts all keys when active.
 		if m.overlay.IsActive() {
 			var cmd tea.Cmd
 			m.overlay, cmd = m.overlay.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			return m, tea.Batch(cmds...)
+			return m, cmd
 		}
 
-		// Global keys
-		if isQuit(msg) && !m.isPageFiltering() {
+		// Ctrl+C always quits, even while a filter input is active.
+		if msg.String() == "ctrl+c" {
 			m.cancelAll()
 			return m, tea.Quit
 		}
 
-		if msg.String() == "?" {
-			m.overlay = m.overlay.ShowHelp()
-			return m, nil
-		}
-
-		// Navigation keys go to sidebar
-		if isNavigationKey(msg) {
-			var cmd tea.Cmd
-			m.sidebar, cmd = m.sidebar.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
+		// While a page's filter input is active, every other key belongs to the
+		// page so the user can type freely (e.g. 'q' in a search term).
+		if !m.isPageFiltering() {
+			if isQuit(msg) {
+				m.cancelAll()
+				return m, tea.Quit
 			}
-			return m, tea.Batch(cmds...)
-		}
-
-		// Connection detail enter key
-		if msg.String() == "enter" && m.activePage == messages.PageConnections {
-			if c := m.connections.SelectedConn(); c != nil {
-				conn := *c // copy to avoid pointer into temporary slice
-				detail := connections.FormatConnDetail(&conn)
-				m.overlay = m.overlay.ShowDetail("Connection Detail", detail)
+			if msg.String() == "?" {
+				m.overlay = m.overlay.ShowHelp()
+				return m, nil
+			}
+			if isNavigationKey(msg) {
+				var cmd tea.Cmd
+				m.sidebar, cmd = m.sidebar.Update(msg)
+				return m, cmd
+			}
+			if page, ok := pageForNumberKey(msg); ok {
+				return m, func() tea.Msg { return messages.SwitchPageMsg{Page: page} }
+			}
+			// Connection detail (Enter) is handled at root so it can build the
+			// overlay from the selected connection.
+			if msg.String() == "enter" && m.activePage == messages.PageConnections {
+				if c := m.connections.SelectedConn(); c != nil {
+					conn := *c // copy to avoid pointer into temporary slice
+					detail := connections.FormatConnDetail(&conn)
+					m.overlay = m.overlay.ShowDetail("Connection Detail", detail)
+					return m, nil
+				}
+			}
+			// Close all connections with X (confirm overlay).
+			if msg.String() == "X" && m.activePage == messages.PageConnections {
+				client := m.client
+				m.overlay = m.overlay.ShowConfirm(
+					"Close All Connections",
+					"Are you sure you want to close all connections?",
+					func() tea.Msg {
+						err := client.CloseAllConnections()
+						return messages.AllConnsClosedMsg{Err: err}
+					},
+				)
 				return m, nil
 			}
 		}
 
-		// Close all connections with X
-		if msg.String() == "X" && m.activePage == messages.PageConnections {
-			client := m.client
-			m.overlay = m.overlay.ShowConfirm(
-				"Close All Connections",
-				"Are you sure you want to close all connections?",
-				func() tea.Msg {
-					err := client.CloseAllConnections()
-					return messages.AllConnsClosedMsg{Err: err}
-				},
-			)
-			return m, nil
-		}
-
-		// Delegate to active page
-		cmd := m.updateActivePage(msg)
-		if cmd != nil {
+		// Delegate to the active page.
+		if cmd := m.updateActivePage(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 
 	case messages.SwitchPageMsg:
 		m.activePage = msg.Page
 		m.sidebar.Active = msg.Page
-		cmd := m.initPage(msg.Page)
-		if cmd != nil {
+		if cmd := m.initPage(msg.Page); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 
-	// WebSocket stream messages - store cancel functions
+	// --- WebSocket stream lifecycle ---
 	case trafficStarted:
 		m.trafficCancel = msg.cancel
 		m.statusbar.Upload = msg.first.Up
@@ -98,8 +100,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusbar.Upload = msg.data.Up
 		m.statusbar.Download = msg.data.Down
 		cmds = append(cmds, waitForTraffic(msg.ch))
+	case trafficDown:
+		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return trafficReconnect{} }))
+	case trafficReconnect:
+		cmds = append(cmds, m.startTrafficStream())
+
 	case connsStarted:
 		m.connsCancel = msg.cancel
+		m.statusbar.Memory = msg.first.Memory
 		var cmd tea.Cmd
 		m.connections, cmd = m.connections.Update(messages.ConnectionsMsg{Data: msg.first})
 		if cmd != nil {
@@ -107,16 +115,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, waitForConns(msg.ch))
 	case connsTick:
+		m.statusbar.Memory = msg.data.Memory
 		var cmd tea.Cmd
 		m.connections, cmd = m.connections.Update(messages.ConnectionsMsg{Data: msg.data})
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		cmds = append(cmds, waitForConns(msg.ch))
+	case connsDown:
+		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return connsReconnect{} }))
+	case connsReconnect:
+		cmds = append(cmds, m.startConnectionsStream())
+
+	case clearStatus:
+		if msg.seq == m.statusSeq {
+			m.statusbar = m.statusbar.SetStatus("", false)
+		}
 
 	default:
-		cmd := m.routeDataMsg(msg)
-		if cmd != nil {
+		if cmd := m.routeDataMsg(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -153,7 +170,7 @@ func (m *Model) updateActivePage(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case messages.ConfigMsg:
 		var cmd tea.Cmd
 		m.home, cmd = m.home.Update(msg)
@@ -190,11 +207,31 @@ func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-	case messages.GroupDelayMsg, messages.ProxyDelayMsg, messages.ProxySelectedMsg:
+	case messages.GroupDelayMsg:
 		var cmd tea.Cmd
 		m.proxies, cmd = m.proxies.Update(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash("Delay test failed: "+msg.Err.Error(), true))
+		}
+	case messages.ProxyDelayMsg:
+		var cmd tea.Cmd
+		m.proxies, cmd = m.proxies.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case messages.ProxySelectedMsg:
+		var cmd tea.Cmd
+		m.proxies, cmd = m.proxies.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash("Select failed: "+msg.Err.Error(), true))
+		} else {
+			cmds = append(cmds, m.flash("Switched "+msg.Group+" → "+msg.Proxy, false))
 		}
 	case messages.ConfigPatchedMsg:
 		var cmd tea.Cmd
@@ -206,14 +243,33 @@ func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-	case messages.ConnClosedMsg, messages.AllConnsClosedMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash("Config update failed: "+msg.Err.Error(), true))
+		}
+	case messages.ConnClosedMsg:
 		var cmd tea.Cmd
 		m.connections, cmd = m.connections.Update(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash("Close failed: "+msg.Err.Error(), true))
+		}
+	case messages.AllConnsClosedMsg:
+		var cmd tea.Cmd
+		m.connections, cmd = m.connections.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash("Close all failed: "+msg.Err.Error(), true))
+		} else {
+			cmds = append(cmds, m.flash("All connections closed", false))
+		}
 	case messages.ErrMsg:
-		// Errors from WS streams are non-fatal; silently ignore
+		if msg.Err != nil {
+			cmds = append(cmds, m.flash(msg.Err.Error(), true))
+		}
 	}
 
 	if len(cmds) > 0 {
@@ -263,6 +319,16 @@ func isNavigationKey(msg tea.KeyMsg) bool {
 	return false
 }
 
+// isPageFiltering reports whether the active page has a filter input open, so
+// the root model can stop intercepting global keys and let the page consume them.
 func (m Model) isPageFiltering() bool {
+	switch m.activePage {
+	case messages.PageProxies:
+		return m.proxies.Filtering()
+	case messages.PageConnections:
+		return m.connections.Filtering()
+	case messages.PageRules:
+		return m.rules.Filtering()
+	}
 	return false
 }

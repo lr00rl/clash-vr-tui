@@ -132,7 +132,7 @@ func (m Model) View() string {
 			infoRow("Core Version", coreVer) +
 			infoRow("Proxy Addr", proxyAddr) +
 			infoRow("Mixed Port", mixedPort) +
-			infoRow("Uptime", uptime) +
+			infoRow("TUI Uptime", uptime) +
 			infoRow("Rules Count", rules),
 	)
 

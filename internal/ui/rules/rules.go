@@ -37,6 +37,11 @@ func (m Model) SetSize(w, h int) Model {
 	return m
 }
 
+// Filtering reports whether the user is typing in the filter input.
+func (m Model) Filtering() bool {
+	return m.filtering
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case messages.RulesMsg:

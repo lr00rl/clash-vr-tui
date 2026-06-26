@@ -18,6 +18,12 @@ func (c *Client) StreamTraffic(ctx context.Context, ch chan<- TrafficData) error
 		return fmt.Errorf("ws /traffic: %w", err)
 	}
 	defer conn.Close()
+	defer close(ch)
+	// Closing the conn on cancellation unblocks the blocking ReadMessage below.
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
 
 	for {
 		select {
@@ -48,6 +54,11 @@ func (c *Client) StreamConnections(ctx context.Context, ch chan<- ConnectionsSna
 		return fmt.Errorf("ws /connections: %w", err)
 	}
 	defer conn.Close()
+	defer close(ch)
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
 
 	for {
 		select {

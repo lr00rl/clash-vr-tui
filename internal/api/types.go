@@ -18,12 +18,12 @@ type ProxiesResponse struct {
 
 // Group represents a proxy group with its nodes.
 type Group struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	Now     string   `json:"now"`
-	All     []string `json:"all"`
+	Name    string         `json:"name"`
+	Type    string         `json:"type"`
+	Now     string         `json:"now"`
+	All     []string       `json:"all"`
 	History []DelayHistory `json:"history,omitempty"`
-	Hidden  bool     `json:"hidden,omitempty"`
+	Hidden  bool           `json:"hidden,omitempty"`
 }
 
 // DelayHistory holds a single delay test result.
@@ -47,14 +47,14 @@ type GroupDelayResult map[string]int
 
 // Connection represents a single active connection.
 type Connection struct {
-	ID       string         `json:"id"`
-	Metadata ConnMetadata   `json:"metadata"`
-	Upload   int64          `json:"upload"`
-	Download int64          `json:"download"`
-	Start    string         `json:"start"`
-	Chains   []string       `json:"chains"`
-	Rule     string         `json:"rule"`
-	RulePayload string      `json:"rulePayload"`
+	ID          string       `json:"id"`
+	Metadata    ConnMetadata `json:"metadata"`
+	Upload      int64        `json:"upload"`
+	Download    int64        `json:"download"`
+	Start       string       `json:"start"`
+	Chains      []string     `json:"chains"`
+	Rule        string       `json:"rule"`
+	RulePayload string       `json:"rulePayload"`
 }
 
 // ConnMetadata holds connection metadata.
@@ -99,13 +99,13 @@ type RulesResponse struct {
 
 // Config represents mihomo runtime config.
 type Config struct {
-	Port           int    `json:"port"`
-	SocksPort      int    `json:"socks-port"`
-	MixedPort      int    `json:"mixed-port"`
-	AllowLan       bool   `json:"allow-lan"`
-	Mode           string `json:"mode"`
-	LogLevel       string `json:"log-level"`
-	TUN            TUNConfig `json:"tun"`
+	Port      int       `json:"port"`
+	SocksPort int       `json:"socks-port"`
+	MixedPort int       `json:"mixed-port"`
+	AllowLan  bool      `json:"allow-lan"`
+	Mode      string    `json:"mode"`
+	LogLevel  string    `json:"log-level"`
+	TUN       TUNConfig `json:"tun"`
 }
 
 // TUNConfig holds TUN settings.
@@ -123,11 +123,11 @@ type VersionInfo struct {
 
 // ConfigPatch is used for PATCH /configs.
 type ConfigPatch struct {
-	Port      *int    `json:"port,omitempty"`
-	SocksPort *int    `json:"socks-port,omitempty"`
-	MixedPort *int    `json:"mixed-port,omitempty"`
-	AllowLan  *bool   `json:"allow-lan,omitempty"`
-	Mode      *string `json:"mode,omitempty"`
-	LogLevel  *string `json:"log-level,omitempty"`
+	Port      *int       `json:"port,omitempty"`
+	SocksPort *int       `json:"socks-port,omitempty"`
+	MixedPort *int       `json:"mixed-port,omitempty"`
+	AllowLan  *bool      `json:"allow-lan,omitempty"`
+	Mode      *string    `json:"mode,omitempty"`
+	LogLevel  *string    `json:"log-level,omitempty"`
 	TUN       *TUNConfig `json:"tun,omitempty"`
 }

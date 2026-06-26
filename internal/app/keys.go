@@ -1,27 +1,29 @@
 package app
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
 
-// isGlobalKey returns true if the key should be handled at root level.
-func isGlobalKey(msg tea.KeyMsg) bool {
+	"github.com/cdcd/clash-vr-tui/internal/messages"
+)
+
+// isQuit returns true if the key should quit the app.
+func isQuit(msg tea.KeyMsg) bool {
 	switch msg.String() {
 	case "ctrl+c", "q":
-		return true
-	case "?":
-		return true
-	case "tab", "shift+tab", "1", "2", "3", "4", "5":
 		return true
 	}
 	return false
 }
 
-// isQuit returns true if the key should quit the app.
-func isQuit(msg tea.KeyMsg) bool {
+// pageForNumberKey maps number keys 1-N to pages for quick jumping.
+func pageForNumberKey(msg tea.KeyMsg) (messages.Page, bool) {
+	pages := messages.Pages()
 	switch msg.String() {
-	case "ctrl+c":
-		return true
-	case "q":
-		return true
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		idx := int(msg.String()[0] - '1')
+		if idx >= 0 && idx < len(pages) {
+			return pages[idx], true
+		}
 	}
-	return false
+	return messages.PageHome, false
 }
