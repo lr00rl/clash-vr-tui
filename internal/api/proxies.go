@@ -21,6 +21,18 @@ func (c *Client) GetProxies() (*ProxiesResponse, error) {
 
 // GetGroups returns all proxy groups with their nodes.
 func (c *Client) GetGroups() ([]Group, error) {
+	groups, err := c.getGroups()
+	if err != nil {
+		return nil, err
+	}
+	order, err := c.getGlobalGroupOrder()
+	if err != nil || len(order) == 0 {
+		return groups, nil
+	}
+	return orderGroupsByName(groups, order), nil
+}
+
+func (c *Client) getGroups() ([]Group, error) {
 	data, err := c.get("/group")
 	if err != nil {
 		return nil, err
@@ -30,6 +42,44 @@ func (c *Client) GetGroups() ([]Group, error) {
 		return nil, fmt.Errorf("unmarshal groups: %w", err)
 	}
 	return resp.Proxies, nil
+}
+
+func (c *Client) getGlobalGroupOrder() ([]string, error) {
+	resp, err := c.GetProxies()
+	if err != nil {
+		return nil, err
+	}
+	global, ok := resp.Proxies["GLOBAL"]
+	if !ok {
+		return nil, nil
+	}
+	return global.All, nil
+}
+
+func orderGroupsByName(groups []Group, order []string) []Group {
+	byName := make(map[string]Group, len(groups))
+	for _, g := range groups {
+		byName[g.Name] = g
+	}
+
+	seen := make(map[string]bool, len(groups))
+	result := make([]Group, 0, len(groups))
+	for _, name := range order {
+		g, ok := byName[name]
+		if !ok || seen[name] {
+			continue
+		}
+		result = append(result, g)
+		seen[name] = true
+	}
+
+	for _, g := range groups {
+		if seen[g.Name] {
+			continue
+		}
+		result = append(result, g)
+	}
+	return result
 }
 
 // GetProxy returns a single proxy by name.

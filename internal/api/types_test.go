@@ -53,3 +53,61 @@ func TestNewWithSelectsTransport(t *testing.T) {
 		t.Errorf("secret not set")
 	}
 }
+
+func TestOrderGroupsByNameUsesGlobalOrderAndAppendsRemainder(t *testing.T) {
+	groups := []Group{
+		{Name: "OuterLand"},
+		{Name: "Auto(lowlatency)"},
+		{Name: "Linkedin"},
+		{Name: "for-test-ip"},
+		{Name: "GLOBAL"},
+		{Name: "GitHub|Microsoft|Telegram"},
+		{Name: "openjobs-vpn"},
+		{Name: "Europe"},
+		{Name: "AI-CF-Suite"},
+		{Name: "InnerLand"},
+		{Name: "Polymarket"},
+		{Name: "Apple"},
+		{Name: "US-CN2-GIA"},
+	}
+	order := []string{
+		"for-test-ip",
+		"Polymarket",
+		"AI-CF-Suite",
+		"Linkedin",
+		"Apple",
+		"GitHub|Microsoft|Telegram",
+		"US-CN2-GIA",
+		"Europe",
+		"openjobs-vpn",
+		"InnerLand",
+		"OuterLand",
+		"Auto(lowlatency)",
+		"Reject",
+	}
+
+	got := orderGroupsByName(groups, order)
+	want := []string{
+		"for-test-ip",
+		"Polymarket",
+		"AI-CF-Suite",
+		"Linkedin",
+		"Apple",
+		"GitHub|Microsoft|Telegram",
+		"US-CN2-GIA",
+		"Europe",
+		"openjobs-vpn",
+		"InnerLand",
+		"OuterLand",
+		"Auto(lowlatency)",
+		"GLOBAL",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ordered groups len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i, name := range want {
+		if got[i].Name != name {
+			t.Fatalf("ordered groups[%d] = %q, want %q; full = %+v", i, got[i].Name, name, got)
+		}
+	}
+}

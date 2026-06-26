@@ -144,6 +144,8 @@ func (m Model) ShowHelp() Model {
 		"Proxies",
 		"  left/right or h/l  switch groups / nodes",
 		"  up/down or j/k     move selection",
+		"  Ctrl+d / Ctrl+u    half-page down / up",
+		"  g or gg / G        top / bottom",
 		"  Enter              select node / focus nodes",
 		"  d / D              test group or selected node",
 		"  T                  HTTP / TCP / ICMP probe mode",

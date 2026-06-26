@@ -175,6 +175,7 @@ func cmdGroups(c *api.Client, opts options) error {
 	if err != nil {
 		return err
 	}
+	groups = visibleGroups(groups)
 	if opts.json {
 		return printJSON(groups)
 	}
@@ -188,6 +189,17 @@ func cmdGroups(c *api.Client, opts options) error {
 		fmt.Printf("%-*s  %-10s -> %-28s (%d nodes)\n", w, g.Name, g.Type, g.Now, len(g.All))
 	}
 	return nil
+}
+
+func visibleGroups(groups []api.Group) []api.Group {
+	result := make([]api.Group, 0, len(groups))
+	for _, g := range groups {
+		if g.Hidden || g.Name == "GLOBAL" {
+			continue
+		}
+		result = append(result, g)
+	}
+	return result
 }
 
 func cmdNodes(c *api.Client, opts options) error {

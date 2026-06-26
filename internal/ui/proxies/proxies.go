@@ -42,6 +42,9 @@ const (
 	groupPanelMaxWidth = 42
 	panelChromeWidth   = 4
 	panelChromeHeight  = 2
+
+	nodeTableHeaderHeight = 2
+	nodeTableBottomSlack  = 1
 )
 
 type groupState struct {
@@ -195,6 +198,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		} else {
 			m.moveNodeVertical(-1)
 		}
+	case "ctrl+d":
+		m.moveFocusedPage(1)
+	case "ctrl+u":
+		m.moveFocusedPage(-1)
 	case "g":
 		if m.focus == focusGroups {
 			m.groupCursor = 0
@@ -302,7 +309,7 @@ func (m Model) View() string {
 	}
 
 	headerLines := m.renderHeaderLines()
-	bodyHeight := max(m.height-len(headerLines), 1)
+	bodyHeight := m.proxyBodyHeight()
 	groupW, nodeW := m.panelWidths()
 
 	left := m.renderGroupsPanel(groupW, bodyHeight)
@@ -347,7 +354,7 @@ func (m Model) renderHeaderLines() []string {
 
 func (m Model) renderGroupsPanel(width, height int) string {
 	visible := m.visibleGroups()
-	bodyH := max(height-panelChromeHeight, 1)
+	bodyH := proxyPanelContentHeight(height)
 	lines := make([]string, 0, bodyH+1)
 
 	title := fmt.Sprintf(" Groups %d ", len(visible))
@@ -358,7 +365,7 @@ func (m Model) renderGroupsPanel(width, height int) string {
 	}
 	lines = append(lines, title)
 
-	rows := max(bodyH-1, 1)
+	rows := groupRowsForPanelHeight(height)
 	start := min(m.groupOffset, max(len(visible)-rows, 0))
 	end := min(start+rows, len(visible))
 	innerW := max(width-panelChromeWidth, 1)
@@ -397,7 +404,7 @@ func (m Model) renderGroupsPanel(width, height int) string {
 }
 
 func (m Model) renderNodesPanel(width, height int) string {
-	bodyH := max(height-panelChromeHeight, 1)
+	bodyH := proxyPanelContentHeight(height)
 	group := m.selectedGroup()
 	if group == nil {
 		box := styles.ProxyGroupBox
@@ -416,7 +423,7 @@ func (m Model) renderNodesPanel(width, height int) string {
 		title = styles.ProxyGroupHeaderSelected.Render(titleText)
 	}
 
-	content := title + "\n" + m.renderNodeTable(width-panelChromeWidth, max(bodyH-1, 1))
+	content := title + "\n" + m.renderNodeTable(width-panelChromeWidth, nodeTableHeightForPanelHeight(height))
 
 	box := styles.ProxyGroupBox
 	if m.focus == focusNodes {
@@ -436,8 +443,7 @@ func (m Model) renderNodeTable(innerWidth, bodyHeight int) string {
 	}
 
 	tableW := max(innerWidth-6, 24)
-	headerH := 2
-	rows := max(bodyHeight-headerH-1, 1)
+	rows := nodeRowsForTableHeight(bodyHeight)
 	start := clamp(m.nodeOffset, 0, max(len(nodes)-rows, 0))
 	end := min(start+rows, len(nodes))
 
@@ -582,7 +588,7 @@ func (m Model) visibleGroups() []visibleGroup {
 	result := make([]visibleGroup, 0, len(m.groups))
 
 	for i, g := range m.groups {
-		if g.group.Hidden {
+		if g.group.Hidden || g.group.Name == "GLOBAL" {
 			continue
 		}
 
@@ -621,6 +627,25 @@ func (m *Model) moveNodeVertical(delta int) {
 	m.nodeCursor = clamp(m.nodeCursor+delta, 0, len(nodes)-1)
 }
 
+func (m *Model) moveFocusedPage(delta int) {
+	if delta == 0 {
+		return
+	}
+	if m.focus == focusGroups {
+		step := max(m.groupVisibleRows()/2, 1)
+		m.groupCursor += delta * step
+		m.nodeCursor = 0
+		return
+	}
+
+	nodes := m.currentNodes()
+	if len(nodes) == 0 {
+		return
+	}
+	step := max(m.nodeVisibleRows()/2, 1)
+	m.nodeCursor = clamp(m.nodeCursor+delta*step, 0, len(nodes)-1)
+}
+
 func (m *Model) clampSelection() {
 	visible := m.visibleGroups()
 	m.groupCursor = clamp(m.groupCursor, 0, max(len(visible)-1, 0))
@@ -631,12 +656,12 @@ func (m *Model) clampSelection() {
 }
 
 func (m *Model) adjustOffsets() {
-	groupBodyHeight := max(m.height-len(m.renderHeaderLines())-panelChromeHeight-1, 1)
+	groupRows := m.groupVisibleRows()
 	if m.groupCursor < m.groupOffset {
 		m.groupOffset = m.groupCursor
 	}
-	if m.groupCursor >= m.groupOffset+groupBodyHeight {
-		m.groupOffset = m.groupCursor - groupBodyHeight + 1
+	if m.groupCursor >= m.groupOffset+groupRows {
+		m.groupOffset = m.groupCursor - groupRows + 1
 	}
 
 	nodes := m.currentNodes()
@@ -645,7 +670,7 @@ func (m *Model) adjustOffsets() {
 		return
 	}
 
-	rowsPerPage := max(m.height-len(m.renderHeaderLines())-panelChromeHeight-3, 1)
+	rowsPerPage := m.nodeVisibleRows()
 	if m.nodeCursor < m.nodeOffset {
 		m.nodeOffset = m.nodeCursor
 	}
@@ -654,6 +679,38 @@ func (m *Model) adjustOffsets() {
 	}
 	maxOffset := max(len(nodes)-rowsPerPage, 0)
 	m.nodeOffset = clamp(m.nodeOffset, 0, maxOffset)
+}
+
+func (m Model) proxyBodyHeight() int {
+	return max(m.height-len(m.renderHeaderLines()), 1)
+}
+
+func (m Model) groupVisibleRows() int {
+	return groupRowsForPanelHeight(m.proxyBodyHeight())
+}
+
+func (m Model) nodeVisibleRows() int {
+	return nodeRowsForPanelHeight(m.proxyBodyHeight())
+}
+
+func proxyPanelContentHeight(panelHeight int) int {
+	return max(panelHeight-panelChromeHeight, 1)
+}
+
+func groupRowsForPanelHeight(panelHeight int) int {
+	return max(proxyPanelContentHeight(panelHeight)-1, 1)
+}
+
+func nodeTableHeightForPanelHeight(panelHeight int) int {
+	return max(proxyPanelContentHeight(panelHeight)-1, 1)
+}
+
+func nodeRowsForPanelHeight(panelHeight int) int {
+	return nodeRowsForTableHeight(nodeTableHeightForPanelHeight(panelHeight))
+}
+
+func nodeRowsForTableHeight(tableHeight int) int {
+	return max(tableHeight-nodeTableHeaderHeight-nodeTableBottomSlack, 1)
 }
 
 func (m Model) panelWidths() (int, int) {

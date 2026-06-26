@@ -56,7 +56,6 @@ var (
 
 	SidebarActive = lipgloss.NewStyle().
 			Foreground(Text).
-			Background(PanelSoft).
 			Bold(true).
 			Padding(0, 1)
 
@@ -114,8 +113,7 @@ var (
 			Foreground(Text)
 
 	TableRowSelected = lipgloss.NewStyle().
-				Foreground(Text).
-				Background(PanelSoft).
+				Foreground(Accent).
 				Bold(true)
 
 	// Delay colors
@@ -167,12 +165,11 @@ var (
 
 	ProxyCardSelected = ProxyCard.
 				BorderForeground(Primary).
-				Background(BgDark).
 				Bold(true)
 
 	// Mode tabs
-	ModeActive   = lipgloss.NewStyle().Foreground(Ink).Background(Accent).Bold(true).Padding(0, 1)
-	ModeInactive = lipgloss.NewStyle().Foreground(TextFaint).Background(Panel).Padding(0, 1)
+	ModeActive   = lipgloss.NewStyle().Foreground(Accent).Bold(true).Underline(true)
+	ModeInactive = lipgloss.NewStyle().Foreground(TextFaint)
 
 	// Filter input
 	FilterPrompt = lipgloss.NewStyle().Foreground(Accent).Bold(true)
@@ -199,24 +196,21 @@ var (
 
 	Chip = lipgloss.NewStyle().
 		Foreground(TextSubtle).
-		Background(PanelSoft).
 		Padding(0, 1)
 
 	ChipActive = lipgloss.NewStyle().
-			Foreground(Ink).
-			Background(Accent).
+			Foreground(Accent).
 			Bold(true).
+			Underline(true).
 			Padding(0, 1)
 
 	ChipWarn = lipgloss.NewStyle().
-			Foreground(Ink).
-			Background(Warning).
+			Foreground(Warning).
 			Bold(true).
 			Padding(0, 1)
 
 	ChipBad = lipgloss.NewStyle().
-		Foreground(Ink).
-		Background(Danger).
+		Foreground(Danger).
 		Bold(true).
 		Padding(0, 1)
 

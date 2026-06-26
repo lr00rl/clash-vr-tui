@@ -61,6 +61,8 @@ func pageBindings(page messages.Page) []Binding {
 	case messages.PageProxies:
 		return []Binding{
 			{Key: "←→", Desc: "panel"},
+			{Key: "C-d/u", Desc: "page"},
+			{Key: "gg/G", Desc: "edge"},
 			{Key: "Enter", Desc: "select"},
 			{Key: "d", Desc: "test"},
 			{Key: "T", Desc: "probe"},
