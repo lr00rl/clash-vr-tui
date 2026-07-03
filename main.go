@@ -25,6 +25,7 @@ func main() {
 	socketPath := flag.String("socket", "", "mihomo Unix socket path")
 	server := flag.String("server", "", "external controller host:port (instead of socket)")
 	secret := flag.String("secret", "", "external controller secret")
+	configPath := flag.String("config-path", "", "mihomo config path for TCP/ICMP node probes")
 	showVersion := flag.Bool("version", false, "show version")
 	flag.Parse()
 
@@ -33,7 +34,12 @@ func main() {
 		os.Exit(0)
 	}
 
-	resolved := config.Resolve(config.Flags{Socket: *socketPath, Server: *server, Secret: *secret})
+	resolved := config.Resolve(config.Flags{
+		Socket:     *socketPath,
+		Server:     *server,
+		Secret:     *secret,
+		ConfigPath: *configPath,
+	})
 	if resolved.ConfigPath != "" {
 		probe.SetDefaultConfigPath(resolved.ConfigPath)
 	}

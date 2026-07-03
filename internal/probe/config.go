@@ -134,7 +134,7 @@ func toInt(v any) int {
 	return 0
 }
 
-var configFlagRe = regexp.MustCompile(`-f\s+(.+?\.ya?ml)(?:\s|$)`)
+var configFlagRe = regexp.MustCompile(`(?:^|\s)-f(?:=|\s+)(.+?\.ya?ml)(?:\s|$)`)
 
 // locateConfig tries to find the running mihomo config: first from the mihomo
 // process command line (-f flag), then common clash-verge install paths.
@@ -187,7 +187,13 @@ func candidatePaths() []string {
 		add(filepath.Join(home, ".config", vergeDir))
 		add(filepath.Join(home, ".local", "share", vergeDir))
 		add(filepath.Join(home, ".config", "clash-verge"))
+		add(filepath.Join(home, ".config", "mihomo"))
+		add(filepath.Join(home, ".config", "clash"))
+		add(filepath.Join(home, ".config", "clash-meta"))
 	}
+	add(filepath.Join(string(os.PathSeparator), "etc", "mihomo"))
+	add(filepath.Join(string(os.PathSeparator), "etc", "clash"))
+	add(filepath.Join(string(os.PathSeparator), "etc", "clash-meta"))
 	return paths
 }
 

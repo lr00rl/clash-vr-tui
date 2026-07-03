@@ -111,6 +111,7 @@ func (c *Client) put(path string, payload interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
+	c.auth(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -136,6 +137,7 @@ func (c *Client) patch(path string, payload interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
+	c.auth(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -157,6 +159,7 @@ func (c *Client) delete(path string) error {
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
+	c.auth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("DELETE %s: %w", path, err)
@@ -184,6 +187,7 @@ func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
+	c.auth(req)
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

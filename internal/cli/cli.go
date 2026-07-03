@@ -28,6 +28,7 @@ type options struct {
 	socket  string
 	server  string
 	secret  string
+	config  string
 	json    bool
 	url     string
 	timeout int
@@ -65,6 +66,13 @@ func Maybe(argv []string, version string) (int, bool) {
 			}
 		case strings.HasPrefix(a, "--secret="):
 			opts.secret = strings.TrimPrefix(a, "--secret=")
+		case a == "--config-path" || a == "-config-path":
+			if i+1 < len(argv) {
+				i++
+				opts.config = argv[i]
+			}
+		case strings.HasPrefix(a, "--config-path="):
+			opts.config = strings.TrimPrefix(a, "--config-path=")
 		case a == "--url" || a == "-url":
 			if i+1 < len(argv) {
 				i++
@@ -93,7 +101,16 @@ func Maybe(argv []string, version string) (int, bool) {
 }
 
 func run(cmd string, opts options, version string) int {
-	resolved := config.Resolve(config.Flags{Socket: opts.socket, Server: opts.server, Secret: opts.secret})
+	resolved := config.Resolve(config.Flags{
+		Socket:     opts.socket,
+		Server:     opts.server,
+		Secret:     opts.secret,
+		ConfigPath: opts.config,
+		TestURL:    opts.url,
+	})
+	if opts.url == "" {
+		opts.url = resolved.TestURL
+	}
 	c := api.NewWith(resolved.Endpoint)
 	var err error
 	switch cmd {
@@ -374,12 +391,13 @@ GLOBAL FLAGS:
   --socket PATH    mihomo Unix socket (default: platform path)
   --server H:P     external controller host:port (instead of socket)
   --secret S       external controller secret
+  --config-path P  mihomo config path for TCP/ICMP probes
   --json           machine-readable JSON output
   --url URL        test URL (test command)
   --timeout MS     delay-test timeout in milliseconds
 
-Connection resolves from flags > env (CLASH_VR_TUI_SOCKET/_SERVER/_SECRET) >
-config file (%s) > defaults.
+Connection resolves from flags > env (CLASH_VR_TUI_SOCKET/_SERVER/_SECRET,
+CLASH_VR_TUI_CONFIG_PATH, CLASH_VR_TUI_TEST_URL) > config file (%s) > defaults.
 
 EXAMPLES:
   clash-vr-tui status --json

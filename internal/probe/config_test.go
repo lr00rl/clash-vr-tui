@@ -39,6 +39,7 @@ func TestConfigFlagRe(t *testing.T) {
 		want string
 	}{
 		{"/usr/bin/verge-mihomo -d /etc -f /etc/clash/clash-verge.yaml -ext-ctl x", "/etc/clash/clash-verge.yaml"},
+		{"/usr/bin/mihomo -d /etc/mihomo -f=/etc/mihomo/config.yaml", "/etc/mihomo/config.yaml"},
 		{`/App/verge-mihomo -f /Users/x/Application Support/io.x/clash-verge.yaml`, "/Users/x/Application Support/io.x/clash-verge.yaml"},
 		{"mihomo --config /tmp/c.yml", ""}, // no -f flag
 	}

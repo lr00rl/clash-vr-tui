@@ -23,9 +23,11 @@ type File struct {
 
 // Flags holds command-line overrides (empty string means unset).
 type Flags struct {
-	Socket string
-	Server string
-	Secret string
+	Socket     string
+	Server     string
+	Secret     string
+	ConfigPath string
+	TestURL    string
 }
 
 // Resolved is the final connection configuration.
@@ -81,8 +83,8 @@ func Resolve(flags Flags) Resolved {
 	}
 	return Resolved{
 		Endpoint:   ep,
-		ConfigPath: f.ConfigPath,
-		TestURL:    f.TestURL,
+		ConfigPath: first(flags.ConfigPath, os.Getenv("CLASH_VR_TUI_CONFIG_PATH"), f.ConfigPath),
+		TestURL:    first(flags.TestURL, os.Getenv("CLASH_VR_TUI_TEST_URL"), f.TestURL),
 	}
 }
 

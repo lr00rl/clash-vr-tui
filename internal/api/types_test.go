@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +54,44 @@ func TestNewWithSelectsTransport(t *testing.T) {
 	}
 	if tcp.secret != "x" {
 		t.Errorf("secret not set")
+	}
+}
+
+func TestClientAttachesBearerSecretToMutatingRequests(t *testing.T) {
+	seen := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer sek" {
+			t.Fatalf("%s Authorization = %q, want Bearer sek", r.Method, got)
+		}
+		seen[r.Method] = true
+		switch r.Method {
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWith(Endpoint{Server: strings.TrimPrefix(srv.URL, "http://"), Secret: "sek"})
+	if _, err := c.put("/x", map[string]string{"name": "node"}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, err := c.patch("/x", map[string]string{"mode": "rule"}); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if err := c.delete("/x"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := c.post("/x", nil); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+
+	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodPost} {
+		if !seen[method] {
+			t.Fatalf("method %s was not exercised; seen=%v", method, seen)
+		}
 	}
 }
 

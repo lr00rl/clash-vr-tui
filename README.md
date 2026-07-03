@@ -110,8 +110,8 @@ Release asset names:
 
 | Platform | Asset |
 |----------|-------|
-| Linux x86_64 | `clash-vr-tui_linux_amd64.tar.gz` |
-| Linux arm64 | `clash-vr-tui_linux_arm64.tar.gz` |
+| Linux x86_64 / amd64 | `clash-vr-tui_linux_amd64.tar.gz` |
+| Linux aarch64 / arm64 | `clash-vr-tui_linux_arm64.tar.gz` |
 | macOS Intel | `clash-vr-tui_darwin_amd64.tar.gz` |
 | macOS Apple Silicon | `clash-vr-tui_darwin_arm64.tar.gz` |
 | Windows x86_64 | `clash-vr-tui_windows_amd64.zip` |
@@ -138,6 +138,37 @@ Requires Go 1.25+.
 The TUI is designed for real terminals over SSH. It does not require a desktop
 environment, and the CLI subcommands are intended for scripts and automation.
 
+### Linux distro compatibility
+
+The Linux release artifacts are built with `CGO_ENABLED=0`, so they are static
+Go ELF binaries. Choose them by kernel OS and CPU architecture, not by distro.
+
+| Distro / server image | Common `uname -m` | Release asset |
+|-----------------------|-------------------|---------------|
+| Alibaba Cloud Linux 4 / OpenAnolis | `x86_64` | `clash-vr-tui_linux_amd64.tar.gz` |
+| Alibaba Cloud Linux 4 / OpenAnolis | `aarch64` | `clash-vr-tui_linux_arm64.tar.gz` |
+| Amazon Linux on EC2 | `x86_64` | `clash-vr-tui_linux_amd64.tar.gz` |
+| Amazon Linux on AWS Graviton | `aarch64` | `clash-vr-tui_linux_arm64.tar.gz` |
+| Ubuntu / Debian | `x86_64` or `aarch64` | matching Linux asset |
+| Fedora / RHEL / CentOS / Rocky / Alma | `x86_64` or `aarch64` | matching Linux asset |
+| Arch Linux | `x86_64` or `aarch64` | matching Linux asset |
+
+For this project, those distros do not need separate binaries. Differences that
+usually matter for native Linux software are libc (`glibc` vs `musl`), package
+format (`.deb` vs `.rpm` vs `pacman`) and system integration, but the release
+binary does not dynamically link libc. The practical runtime differences are:
+
+- CPU architecture: `x86_64` means `linux_amd64`; `aarch64`/`arm64` means
+  `linux_arm64`.
+- Kernel and permissions: ICMP probes may require root or `CAP_NET_RAW`;
+  HTTP/TCP checks and normal controller operations do not.
+- Controller access: the mihomo `external-controller` or
+  `external-controller-unix` endpoint must be reachable from the terminal where
+  `clash-vr-tui` runs.
+- Service layout: config files may live in `/etc/mihomo/config.yaml`,
+  `~/.config/mihomo/config.yaml`, or a custom `-f` path; pass `--config-path`
+  when TCP/ICMP probes need help finding node server addresses.
+
 ## Usage
 
 Launch the interactive TUI:
@@ -146,6 +177,32 @@ Launch the interactive TUI:
 clash-vr-tui                          # auto-detects the verge socket
 clash-vr-tui --socket /path/to.sock
 clash-vr-tui --server 127.0.0.1:9090 --secret mypw   # external controller
+```
+
+### Plain mihomo core
+
+`clash-vr-tui` talks to mihomo's standard REST/WebSocket controller API, so it
+does not require Clash Verge Rev. For a standalone mihomo service, enable an
+external controller in your mihomo config:
+
+```yaml
+external-controller: 127.0.0.1:9090
+secret: "mypw"
+```
+
+Then connect with:
+
+```sh
+clash-vr-tui --server 127.0.0.1:9090 --secret mypw --config-path /etc/mihomo/config.yaml
+```
+
+`--config-path` is only needed for TCP/ICMP node probes; normal status, proxy
+switching, rules, logs and connections use the controller API directly.
+
+If you expose `external-controller-unix`, pass its socket path:
+
+```sh
+clash-vr-tui --socket /run/mihomo/mihomo.sock
 ```
 
 ### CLI (scriptable, no TUI)
@@ -188,6 +245,7 @@ closes it. `Ctrl+C` always quits.
 Connection settings resolve from **flags > env > config file > defaults**:
 
 - env: `CLASH_VR_TUI_SOCKET`, `CLASH_VR_TUI_SERVER`, `CLASH_VR_TUI_SECRET`
+- env: `CLASH_VR_TUI_CONFIG_PATH`, `CLASH_VR_TUI_TEST_URL`
 - file: `~/.config/clash-vr-tui/config.yaml`
 
 ```yaml

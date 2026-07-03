@@ -33,6 +33,26 @@ func TestResolveEnvTier(t *testing.T) {
 	}
 }
 
+func TestResolveConfigPathAndTestURLPrecedence(t *testing.T) {
+	t.Setenv("CLASH_VR_TUI_CONFIG_PATH", "/etc/mihomo/config.yaml")
+	t.Setenv("CLASH_VR_TUI_TEST_URL", "https://example.com/generate_204")
+	r := Resolve(Flags{})
+	if r.ConfigPath != "/etc/mihomo/config.yaml" {
+		t.Fatalf("env config path = %q", r.ConfigPath)
+	}
+	if r.TestURL != "https://example.com/generate_204" {
+		t.Fatalf("env test url = %q", r.TestURL)
+	}
+
+	r = Resolve(Flags{ConfigPath: "/tmp/core.yaml", TestURL: "https://probe.local/204"})
+	if r.ConfigPath != "/tmp/core.yaml" {
+		t.Fatalf("flag config path = %q", r.ConfigPath)
+	}
+	if r.TestURL != "https://probe.local/204" {
+		t.Fatalf("flag test url = %q", r.TestURL)
+	}
+}
+
 func TestFirst(t *testing.T) {
 	if first("", "", "c") != "c" {
 		t.Error("first should return first non-empty")
