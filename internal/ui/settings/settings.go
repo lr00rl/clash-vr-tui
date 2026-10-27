@@ -93,10 +93,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.err = msg.Err
 		}
 	case messages.ConfigPatchedMsg:
-		if msg.Err == nil {
-			return m, m.fetchConfig()
+		if msg.Config != nil {
+			m.config = msg.Config
 		}
-		m.err = msg.Err
+		if msg.Err != nil {
+			m.err = msg.Err
+		}
 	case tea.KeyMsg:
 		if m.selectingLevel {
 			return m.handleLevelSelect(msg)
@@ -129,7 +131,7 @@ func (m Model) handleLevelSelect(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "enter":
 		level := logLevels[m.levelCursor]
 		m.selectingLevel = false
-		return m, m.patchConfig(api.ConfigPatch{LogLevel: &level})
+		return m, messages.RequestConfigChange("Log level "+level, api.ConfigPatch{LogLevel: &level})
 	case "esc":
 		m.selectingLevel = false
 	}
@@ -168,12 +170,12 @@ func (m Model) toggleItem(item settingItem) (Model, tea.Cmd) {
 	switch item.label {
 	case "TUN Mode":
 		enabled := !m.config.TUN.Enable
-		return m, m.patchConfig(api.ConfigPatch{
+		return m, messages.RequestConfigChange("TUN "+onOff(enabled), api.ConfigPatch{
 			TUN: &api.TUNConfig{Enable: enabled},
 		})
 	case "Allow LAN":
 		enabled := !m.config.AllowLan
-		return m, m.patchConfig(api.ConfigPatch{AllowLan: &enabled})
+		return m, messages.RequestConfigChange("Allow LAN "+onOff(enabled), api.ConfigPatch{AllowLan: &enabled})
 	}
 	return m, nil
 }
@@ -184,6 +186,7 @@ func (m Model) View() string {
 	}
 
 	width := max(m.width-2, 20)
+	columnW := min(width, 72)
 
 	var b strings.Builder
 
@@ -205,15 +208,15 @@ func (m Model) View() string {
 					value = styles.StateBadge("OFF", "")
 				}
 			case "select":
-				value = styles.Badge(strings.ToUpper(item.getStr(m.config)), true)
+				value = styles.Badge(strings.ToUpper(styles.SafeText(item.getStr(m.config))), true)
 			case "info":
-				value = styles.Subtle.Render(item.getStr(m.config))
+				value = styles.Subtle.Render(styles.SafeText(item.getStr(m.config)))
 			}
 		}
 
-		line := renderSettingRow(item, value, width, i == m.cursor)
+		line := renderSettingRow(item, value, columnW, i == m.cursor)
 		if i == m.cursor {
-			b.WriteString(styles.TableRowSelected.Width(width).Render(line))
+			b.WriteString(styles.TableRowSelected.Width(columnW).Render(line))
 		} else {
 			b.WriteString(styles.TableRow.Render(line))
 		}
@@ -223,8 +226,8 @@ func (m Model) View() string {
 	// Log level selector overlay
 	if m.selectingLevel {
 		b.WriteString("\n")
-		b.WriteString(styles.PanelStyle.Width(max(width-4, 1)).Render(
-			styles.PanelTitle("Log Level") + "\n" + m.renderLevelPicker(width-4),
+		b.WriteString(styles.PanelStyle.Width(max(columnW-4, 1)).Render(
+			styles.PanelTitle("Log Level") + "\n" + m.renderLevelPicker(columnW-4),
 		))
 		b.WriteString("\n")
 	}
@@ -276,9 +279,9 @@ func (m Model) fetchConfig() tea.Cmd {
 	}
 }
 
-func (m Model) patchConfig(patch api.ConfigPatch) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.PatchConfig(patch)
-		return messages.ConfigPatchedMsg{Err: err}
+func onOff(on bool) string {
+	if on {
+		return "on"
 	}
+	return "off"
 }

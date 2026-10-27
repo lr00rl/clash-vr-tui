@@ -24,7 +24,7 @@ func TestViewFitsPane(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, page := range messages.Pages() {
-				m := NewModel(api.NewWith(api.Endpoint{Socket: "/tmp/test.sock"}))
+				m := NewModel(api.NewWith(api.Endpoint{Socket: "/tmp/test.sock"}), "")
 				m.ready = true
 				m.width = tt.width
 				m.height = tt.height

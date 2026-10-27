@@ -110,21 +110,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- WebSocket stream lifecycle ---
 	case trafficStarted:
+		if msg.gen != m.trafficGen {
+			msg.cancel()
+			break
+		}
 		m.trafficCancel = msg.cancel
+		m.trafficHealth = streamHealth{state: "live", last: time.Now()}
 		m.statusbar.Upload = msg.first.Up
 		m.statusbar.Download = msg.first.Down
-		cmds = append(cmds, waitForTraffic(msg.ch))
+		cmds = append(cmds, waitForTraffic(msg.gen, msg.ch))
 	case trafficTick:
+		if msg.gen != m.trafficGen {
+			break
+		}
+		m.trafficHealth = streamHealth{state: "live", last: time.Now()}
 		m.statusbar.Upload = msg.data.Up
 		m.statusbar.Download = msg.data.Down
-		cmds = append(cmds, waitForTraffic(msg.ch))
+		cmds = append(cmds, waitForTraffic(msg.gen, msg.ch))
 	case trafficDown:
-		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return trafficReconnect{} }))
+		if msg.gen != m.trafficGen {
+			break
+		}
+		if m.trafficCancel != nil {
+			m.trafficCancel()
+			m.trafficCancel = nil
+		}
+		m.trafficHealth.state, m.trafficHealth.err = "reconnecting", msg.err
+		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return trafficReconnect{gen: msg.gen} }))
 	case trafficReconnect:
+		if msg.gen != m.trafficGen {
+			break
+		}
+		m.trafficGen++
+		m.trafficHealth.state = "connecting"
 		cmds = append(cmds, m.startTrafficStream())
 
 	case connsStarted:
+		if msg.gen != m.connsGen {
+			msg.cancel()
+			break
+		}
 		m.connsCancel = msg.cancel
+		m.connsHealth = streamHealth{state: "live", last: time.Now()}
 		m.statusbar.Memory = msg.first.Memory
 		m.home = m.home.SetStats(msg.first.Memory, len(msg.first.Connections))
 		var cmd tea.Cmd
@@ -132,8 +159,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		cmds = append(cmds, waitForConns(msg.ch))
+		cmds = append(cmds, waitForConns(msg.gen, msg.ch))
 	case connsTick:
+		if msg.gen != m.connsGen {
+			break
+		}
+		m.connsHealth = streamHealth{state: "live", last: time.Now()}
 		m.statusbar.Memory = msg.data.Memory
 		m.home = m.home.SetStats(msg.data.Memory, len(msg.data.Connections))
 		var cmd tea.Cmd
@@ -141,23 +172,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		cmds = append(cmds, waitForConns(msg.ch))
+		cmds = append(cmds, waitForConns(msg.gen, msg.ch))
 	case connsDown:
-		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return connsReconnect{} }))
+		if msg.gen != m.connsGen {
+			break
+		}
+		if m.connsCancel != nil {
+			m.connsCancel()
+			m.connsCancel = nil
+		}
+		m.connsHealth.state, m.connsHealth.err = "reconnecting", msg.err
+		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return connsReconnect{gen: msg.gen} }))
 	case connsReconnect:
+		if msg.gen != m.connsGen {
+			break
+		}
+		m.connsGen++
+		m.connsHealth.state = "connecting"
 		cmds = append(cmds, m.startConnectionsStream())
 
 	case logsStarted:
+		if msg.gen != m.logsGen {
+			msg.cancel()
+			break
+		}
 		m.logsCancel = msg.cancel
+		m.logsHealth = streamHealth{state: "live", last: time.Now()}
 		m.logs = m.logs.Add(msg.first)
-		cmds = append(cmds, waitForLogs(msg.ch))
+		cmds = append(cmds, waitForLogs(msg.gen, msg.ch))
 	case logsTick:
+		if msg.gen != m.logsGen {
+			break
+		}
+		m.logsHealth = streamHealth{state: "live", last: time.Now()}
 		m.logs = m.logs.Add(msg.entry)
-		cmds = append(cmds, waitForLogs(msg.ch))
+		cmds = append(cmds, waitForLogs(msg.gen, msg.ch))
 	case logsDown:
-		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return logsReconnect{} }))
+		if msg.gen != m.logsGen {
+			break
+		}
+		if m.logsCancel != nil {
+			m.logsCancel()
+			m.logsCancel = nil
+		}
+		m.logsHealth.state, m.logsHealth.err = "reconnecting", msg.err
+		cmds = append(cmds, tea.Tick(reconnectDelay, func(time.Time) tea.Msg { return logsReconnect{gen: msg.gen} }))
 	case logsReconnect:
+		if msg.gen != m.logsGen {
+			break
+		}
 		if m.logsStarted {
+			m.logsGen++
+			m.logsHealth.state = "connecting"
 			cmds = append(cmds, m.startLogsStream())
 		}
 
@@ -172,6 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	m = m.syncStreamState()
 	return m, tea.Batch(cmds...)
 }
 
@@ -271,6 +338,13 @@ func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 		} else {
 			cmds = append(cmds, m.flash("Switched "+msg.Group+" → "+msg.Proxy, false))
 		}
+	case messages.ConfigChangeMsg:
+		apply := applyConfigChange(m.client, msg)
+		if warning := configChangeWarning(msg.Patch); warning != "" {
+			m.overlay = m.overlay.ShowConfirm("Confirm: "+msg.Label, warning, apply)
+			break
+		}
+		cmds = append(cmds, apply)
 	case messages.ConfigPatchedMsg:
 		var cmd tea.Cmd
 		m.home, cmd = m.home.Update(msg)
@@ -281,9 +355,8 @@ func (m *Model) routeDataMsg(msg tea.Msg) tea.Cmd {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		if msg.Err != nil {
-			cmds = append(cmds, m.flash("Config update failed: "+msg.Err.Error(), true))
-		}
+		text, isErr := configPatchedStatus(msg)
+		cmds = append(cmds, m.flash(text, isErr))
 	case messages.ConnClosedMsg:
 		var cmd tea.Cmd
 		m.connections, cmd = m.connections.Update(msg)

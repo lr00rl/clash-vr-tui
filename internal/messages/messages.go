@@ -1,6 +1,11 @@
 package messages
 
-import "github.com/cdcd/clash-vr-tui/internal/api"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/cdcd/clash-vr-tui/internal/api"
+	"github.com/cdcd/clash-vr-tui/internal/probe"
+)
 
 // Page identifies which page is active.
 type Page int
@@ -79,18 +84,40 @@ type RulesMsg struct {
 	Err   error
 }
 
-// GroupDelayMsg carries delay test results for a group.
+// DelayResult keeps a measurement distinct from a timeout, skipped node, or
+// failed probe. Delay is meaningful only when Status is DelayOK.
+type DelayStatus string
+
+const (
+	DelayOK      DelayStatus = "ok"
+	DelayTimeout DelayStatus = "timeout"
+	DelaySkipped DelayStatus = "skipped"
+	DelayError   DelayStatus = "error"
+)
+
+type DelayResult struct {
+	Delay  int
+	Status DelayStatus
+	Reason string
+}
+
+// GroupDelayMsg identifies the probe mode and request that produced a result.
 type GroupDelayMsg struct {
-	Group  string
-	Result api.GroupDelayResult
-	Err    error
+	Group     string
+	Mode      probe.Mode
+	RequestID uint64
+	Results   map[string]DelayResult
+	Err       error
 }
 
 // ProxyDelayMsg carries delay test result for a single proxy.
 type ProxyDelayMsg struct {
-	Name  string
-	Delay int
-	Err   error
+	Group     string
+	Name      string
+	Mode      probe.Mode
+	RequestID uint64
+	Result    DelayResult
+	Err       error
 }
 
 // ProxySelectedMsg signals a proxy was selected in a group.
@@ -100,9 +127,26 @@ type ProxySelectedMsg struct {
 	Err   error
 }
 
-// ConfigPatchedMsg signals a config patch completed.
+// ConfigChangeMsg asks the root model to apply a config patch. The root decides
+// which changes need confirmation, so a page cannot bypass that policy.
+type ConfigChangeMsg struct {
+	Label string // what the change does, e.g. "Allow LAN on"
+	Patch api.ConfigPatch
+}
+
+// RequestConfigChange returns a command that emits a ConfigChangeMsg.
+func RequestConfigChange(label string, patch api.ConfigPatch) tea.Cmd {
+	return func() tea.Msg { return ConfigChangeMsg{Label: label, Patch: patch} }
+}
+
+// ConfigPatchedMsg reports a patch and the config read back after it. Err is
+// the patch failure; ReadErr means the patch was sent but could not be checked.
 type ConfigPatchedMsg struct {
-	Err error
+	Label   string
+	Patch   api.ConfigPatch
+	Config  *api.Config
+	Err     error
+	ReadErr error
 }
 
 // ConnClosedMsg signals a connection was closed.

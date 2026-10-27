@@ -3,6 +3,7 @@ package logs
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
@@ -17,20 +18,24 @@ const maxEntries = 2000
 var levelOrder = []string{"", "info", "warning", "error"}
 
 type Model struct {
-	entries   []api.LogEntry
-	level     string // minimum level filter ("" = all)
-	filter    string
-	filtering bool
-	paused    bool
-	follow    bool // auto-scroll to newest
-	cursor    int
-	offset    int
-	width     int
-	height    int
+	entries     []api.LogEntry
+	level       string // minimum level filter ("" = all)
+	filter      string
+	filtering   bool
+	paused      bool
+	frozenNew   int
+	dropped     int
+	follow      bool // auto-scroll to newest
+	cursor      int
+	offset      int
+	width       int
+	height      int
+	streamState string
+	streamLast  time.Time
 }
 
 func New() Model {
-	return Model{follow: true}
+	return Model{follow: true, streamState: "connecting"}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -44,15 +49,27 @@ func (m Model) SetSize(w, h int) Model {
 // Filtering reports whether the user is typing in the filter input.
 func (m Model) Filtering() bool { return m.filtering }
 
-// Add appends a log entry to the ring buffer (called from the root model as the
-// /logs stream pushes lines). Dropped while paused.
+// SetStreamState keeps collection health separate from the frozen viewport.
+func (m Model) SetStreamState(state string, last time.Time) Model {
+	m.streamState = state
+	m.streamLast = last
+	return m
+}
+
+// Add appends a log entry to the bounded buffer. Pausing freezes the viewport;
+// collection continues so resuming does not create an invisible gap.
 func (m Model) Add(e api.LogEntry) Model {
-	if m.paused {
-		return m
-	}
 	m.entries = append(m.entries, e)
 	if len(m.entries) > maxEntries {
-		m.entries = m.entries[len(m.entries)-maxEntries:]
+		overflow := len(m.entries) - maxEntries
+		m.entries = m.entries[overflow:]
+		m.dropped += overflow
+		m.cursor = max(m.cursor-overflow, 0)
+		m.offset = max(m.offset-overflow, 0)
+	}
+	if m.paused {
+		m.frozenNew++
+		return m
 	}
 	if m.follow {
 		m.cursor = len(m.visibleEntries()) - 1
@@ -93,8 +110,19 @@ func (m Model) handleKey(msg tea.KeyMsg) Model {
 		m.adjustViewport()
 	case " ":
 		m.paused = !m.paused
+		if m.paused {
+			m.frozenNew = 0
+		} else {
+			m.frozenNew = 0
+			if m.follow {
+				m.cursor = max(len(m.visibleEntries())-1, 0)
+				m.adjustViewport()
+			}
+		}
 	case "c":
 		m.entries = nil
+		m.frozenNew = 0
+		m.dropped = 0
 		m.cursor = 0
 		m.offset = 0
 		m.follow = true
@@ -159,9 +187,16 @@ func (m Model) View() string {
 	offset := clamp(m.offset, 0, max(len(visible)-maxRows, 0))
 	end := min(offset+maxRows, len(visible))
 
-	state := styles.StateBadge("LIVE", "ok")
+	state := styles.StateBadge("CONNECTING", "warn")
+	switch m.streamState {
+	case "live":
+		state = styles.StateBadge("LIVE", "ok")
+	case "reconnecting":
+		state = styles.StateBadge("RECONNECTING", "warn")
+	}
+	viewState := ""
 	if m.paused {
-		state = styles.StateBadge("PAUSED", "warn")
+		viewState = "  " + styles.StateBadge(fmt.Sprintf("FROZEN +%d", m.frozenNew), "warn")
 	}
 	lvl := m.level
 	if lvl == "" {
@@ -171,9 +206,16 @@ func (m Model) View() string {
 	if len(visible) > 0 {
 		pos = fmt.Sprintf("  %d-%d/%d", offset+1, end, len(visible))
 	}
-	meta := fmt.Sprintf("level %s  buffer %d/%d%s", lvl, len(m.entries), maxEntries, pos)
+	meta := fmt.Sprintf("level %s  buffer %d/%d", lvl, len(m.entries), maxEntries)
+	if m.dropped > 0 {
+		meta += fmt.Sprintf("  dropped %d", m.dropped)
+	}
+	if !m.streamLast.IsZero() {
+		meta += "  last " + m.streamLast.Format("15:04:05")
+	}
+	meta += pos
 	b.WriteString(styles.PageHeader("Logs", meta, width) + "\n")
-	b.WriteString(state + "  " + styles.Faint.Render("space pause  l level  c clear  / filter") + "\n")
+	b.WriteString(state + viewState + "  " + styles.Faint.Render("space freeze  l level  c clear  / filter") + "\n")
 	if m.filtering {
 		b.WriteString(styles.FilterLine("Filter", m.filter, true) + "\n")
 	} else if m.filter != "" {
@@ -189,7 +231,7 @@ func (m Model) View() string {
 	for i := offset; i < end; i++ {
 		e := visible[i]
 		tag := levelTag(e.Type)
-		payload := truncate(e.Payload, max(width-12, 8))
+		payload := truncate(styles.SafeText(e.Payload), max(width-12, 8))
 		line := tag + " " + payload
 		if i == m.cursor {
 			b.WriteString(styles.TableRowSelected.Width(width).Render("▸ " + line))
@@ -221,6 +263,7 @@ func (m Model) visibleEntries() []api.LogEntry {
 }
 
 func levelTag(t string) string {
+	t = styles.SafeText(t)
 	label := strings.ToUpper(t)
 	if len(label) > 4 {
 		label = label[:4]

@@ -351,15 +351,15 @@ func (m Model) View() string {
 		if e.conn.Metadata.DstPort != "" {
 			host += ":" + e.conn.Metadata.DstPort
 		}
-		host = truncate(host, hostW)
+		host = truncate(styles.SafeText(host), hostW)
 
 		chain := ""
 		if len(e.conn.Chains) > 0 {
 			chain = e.conn.Chains[0]
 		}
-		chain = truncate(chain, chainW)
+		chain = truncate(styles.SafeText(chain), chainW)
 
-		rule := e.conn.Rule
+		rule := styles.SafeText(e.conn.Rule)
 		rule = truncate(rule, ruleW)
 
 		// Build cells with display-width-aware padding so CJK hosts/chains stay
@@ -411,16 +411,16 @@ func FormatConnDetail(c *api.Connection) string {
 			"Upload:      %s\n"+
 			"Download:    %s\n"+
 			"Start:       %s",
-		c.Metadata.Host,
-		c.Metadata.SrcIP, c.Metadata.SrcPort,
-		c.Metadata.DstIP, c.Metadata.DstPort,
-		c.Metadata.Process,
-		c.Metadata.ProcessPath,
-		c.Metadata.Type,
-		c.Metadata.Network,
-		strings.Join(c.Chains, " → "),
-		c.Rule,
-		c.RulePayload,
+		styles.SafeText(c.Metadata.Host),
+		styles.SafeText(c.Metadata.SrcIP), styles.SafeText(c.Metadata.SrcPort),
+		styles.SafeText(c.Metadata.DstIP), styles.SafeText(c.Metadata.DstPort),
+		styles.SafeText(c.Metadata.Process),
+		styles.SafeText(c.Metadata.ProcessPath),
+		styles.SafeText(c.Metadata.Type),
+		styles.SafeText(c.Metadata.Network),
+		styles.SafeText(strings.Join(c.Chains, " → ")),
+		styles.SafeText(c.Rule),
+		styles.SafeText(c.RulePayload),
 		formatBytes(c.Upload),
 		formatBytes(c.Download),
 		c.Start,

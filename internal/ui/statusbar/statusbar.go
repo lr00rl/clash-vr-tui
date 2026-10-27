@@ -2,23 +2,33 @@ package statusbar
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
 type Model struct {
-	Upload    int64
-	Download  int64
-	Memory    int64
-	status    string
-	statusErr bool
-	width     int
+	Upload      int64
+	Download    int64
+	Memory      int64
+	status      string
+	statusErr   bool
+	streamState string
+	streamLast  time.Time
+	width       int
 }
 
 func New() Model {
-	return Model{}
+	return Model{streamState: "connecting"}
+}
+
+func (m Model) SetStreamState(state string, last time.Time) Model {
+	m.streamState = state
+	m.streamLast = last
+	return m
 }
 
 func (m Model) SetWidth(w int) Model {
@@ -46,32 +56,38 @@ func (m Model) View() string {
 	up := styles.TrafficUp.Render(fmt.Sprintf("UP %s", formatSpeed(m.Upload)))
 	down := styles.TrafficDown.Render(fmt.Sprintf("DOWN %s", formatSpeed(m.Download)))
 	right := fmt.Sprintf("%s  %s", down, up)
-	if m.Memory > 0 {
-		right += "  " + memStyle.Render("MEM "+formatBytes(m.Memory))
+	state := styles.StateBadge("CONNECTING", "warn")
+	switch m.streamState {
+	case "live":
+		state = styles.StateBadge("LIVE", "ok")
+	case "reconnecting":
+		state = styles.StateBadge("STALE", "warn")
+	}
+	if m.streamState != "live" && !m.streamLast.IsZero() {
+		state += styles.Faint.Render(" " + m.streamLast.Format("15:04:05"))
+	}
+	right = state + "  " + right
+	// StatusBar pads one cell on each side inside innerW.
+	avail := innerW - 2
+	if mem := "  " + memStyle.Render("MEM "+formatBytes(m.Memory)); m.Memory > 0 &&
+		lipgloss.Width(title)+lipgloss.Width(right)+lipgloss.Width(mem)+1 <= avail {
+		right += mem
 	}
 
-	mid := ""
-	if m.status != "" {
-		// Truncate raw text (before styling) so ANSI codes stay intact.
-		maxMid := max(innerW-lipgloss.Width(title)-lipgloss.Width(right)-4, 0)
-		text := truncate(m.status, maxMid)
+	left := title
+	const sep = 3 // " • "
+	// Truncate raw text (before styling) so ANSI codes stay intact.
+	if maxMid := avail - lipgloss.Width(title) - lipgloss.Width(right) - sep - 1; m.status != "" && maxMid > 1 {
+		text := truncate(styles.SafeText(m.status), maxMid)
+		mid := statusInfoStyle.Render(text)
 		if m.statusErr {
 			mid = statusErrStyle.Render(text)
-		} else {
-			mid = statusInfoStyle.Render(text)
 		}
+		left = title + " " + styles.Faint.Render("•") + " " + mid
 	}
 
-	gap := max(innerW-lipgloss.Width(title)-lipgloss.Width(mid)-lipgloss.Width(right)-3, 1)
-
-	var body string
-	if mid == "" {
-		padding := lipgloss.NewStyle().Width(gap + 1).Render("")
-		body = title + padding + right
-	} else {
-		left := lipgloss.NewStyle().Width(gap).Render("")
-		body = title + " " + styles.Faint.Render("•") + " " + mid + left + right
-	}
+	gap := max(avail-lipgloss.Width(left)-lipgloss.Width(right), 1)
+	body := ansi.Truncate(left+lipgloss.NewStyle().Width(gap).Render("")+right, avail, "")
 
 	return styles.StatusBar.Width(innerW).Render(body)
 }

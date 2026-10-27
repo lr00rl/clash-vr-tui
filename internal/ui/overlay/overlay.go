@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,6 +26,7 @@ type Model struct {
 	Content string
 	width   int
 	height  int
+	offset  int
 
 	// For confirm overlays
 	OnConfirm tea.Cmd
@@ -47,6 +49,31 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.Active == TypeHelp {
+			lines := strings.Split(m.Content, "\n")
+			pageRows := m.bodyRows()
+			maxOffset := max(len(lines)-pageRows, 0)
+			switch msg.String() {
+			case "j", "down":
+				m.offset = min(m.offset+1, maxOffset)
+				return m, nil
+			case "k", "up":
+				m.offset = max(m.offset-1, 0)
+				return m, nil
+			case "pgdown", "ctrl+d":
+				m.offset = min(m.offset+pageRows, maxOffset)
+				return m, nil
+			case "pgup", "ctrl+u":
+				m.offset = max(m.offset-pageRows, 0)
+				return m, nil
+			case "g", "home":
+				m.offset = 0
+				return m, nil
+			case "G", "end":
+				m.offset = maxOffset
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "esc", "q":
 			m.Active = TypeNone
@@ -92,21 +119,33 @@ func (m Model) View() string {
 		maxH = max(m.height-2, 6)
 	}
 
-	title := styles.PageHeader(m.Title, "Esc close", maxW-4)
+	meta := "Esc close"
+	if m.Active == TypeHelp {
+		meta = "j/k scroll  Esc close"
+	}
+	title := styles.PageHeader(m.Title, meta, maxW-4)
 
 	var body string
 	switch m.Active {
 	case TypeConfirm:
 		body = m.Content + "\n\n" + styles.KeyHint("y", "confirm") + "  " + styles.KeyHint("n", "cancel")
+	case TypeHelp:
+		lines := strings.Split(m.Content, "\n")
+		rows := m.bodyRows()
+		maxOffset := max(len(lines)-rows, 0)
+		offset := min(m.offset, maxOffset)
+		end := min(offset+rows, len(lines))
+		body = strings.Join(lines[offset:end], "\n")
+		body += "\n" + styles.Faint.Render(helpPosition(offset, end, len(lines)))
 	default:
 		body = m.Content
 	}
 
-	// Truncate body lines if too tall
+	// Detail and confirmation overlays remain bounded without introducing a
+	// second navigation mode. Help has its own scrollable viewport above.
 	lines := strings.Split(body, "\n")
-	if len(lines) > maxH-4 {
-		lines = lines[:maxH-4]
-		lines = append(lines, "...")
+	if m.Active != TypeHelp && len(lines) > maxH-4 {
+		lines = append(lines[:maxH-5], "...")
 	}
 	body = strings.Join(lines, "\n")
 
@@ -123,10 +162,29 @@ func (m Model) View() string {
 	)
 }
 
+func (m Model) bodyRows() int {
+	maxH := m.height * 3 / 4
+	if maxH < 10 {
+		maxH = 10
+	}
+	if maxH > m.height-2 {
+		maxH = max(m.height-2, 6)
+	}
+	return max(maxH-5, 1)
+}
+
+func helpPosition(offset, end, total int) string {
+	if total == 0 {
+		return "0/0"
+	}
+	return fmt.Sprintf("%d-%d/%d", offset+1, end, total)
+}
+
 // ShowHelp shows the global help overlay.
 func (m Model) ShowHelp() Model {
 	m.Active = TypeHelp
 	m.Title = "Keyboard Shortcuts"
+	m.offset = 0
 	m.Content = strings.Join([]string{
 		"Navigation",
 		"  Tab / Shift+Tab    next / previous page",
@@ -160,7 +218,7 @@ func (m Model) ShowHelp() Model {
 		"  / filter   g top   G bottom",
 		"",
 		"Logs",
-		"  space pause   l level   c clear   / filter",
+		"  space freeze view   l level   c clear   / filter",
 		"",
 		"Config",
 		"  Enter / Space   toggle or edit selected setting",
@@ -173,6 +231,7 @@ func (m Model) ShowDetail(title, content string) Model {
 	m.Active = TypeDetail
 	m.Title = title
 	m.Content = content
+	m.offset = 0
 	return m
 }
 
@@ -182,5 +241,6 @@ func (m Model) ShowConfirm(title, content string, onConfirm tea.Cmd) Model {
 	m.Title = title
 	m.Content = content
 	m.OnConfirm = onConfirm
+	m.offset = 0
 	return m
 }

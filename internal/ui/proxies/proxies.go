@@ -1,7 +1,10 @@
 package proxies
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
@@ -40,8 +44,14 @@ const (
 	proxyPanelGap      = 1
 	groupPanelMinWidth = 28
 	groupPanelMaxWidth = 42
-	panelChromeWidth   = 4
-	panelChromeHeight  = 2
+	// panelChromeWidth is border plus padding. lipgloss counts padding inside
+	// Width, so a box is sized width-panelBorderWidth to fill its slot.
+	panelChromeWidth = 4
+	panelBorderWidth = 2
+	// Below twoPanelMinWidth the node column would cut names to a few cells,
+	// so the page shows one panel at a time.
+	twoPanelMinWidth  = 78
+	panelChromeHeight = 2
 
 	nodeTableHeaderHeight = 2
 	nodeTableBottomSlack  = 1
@@ -49,7 +59,7 @@ const (
 
 type groupState struct {
 	group  api.Group
-	delays map[string]int
+	delays map[probe.Mode]map[string]messages.DelayResult
 }
 
 type visibleGroup struct {
@@ -75,16 +85,72 @@ type Model struct {
 	width       int
 	height      int
 	err         error
+	// testURL is the configured default for groups without their own testUrl.
+	testURL string
+	// inflight maps a probe key to the newest request for it; a reply whose
+	// RequestID differs was superseded and is dropped.
+	inflight    map[string]uint64
+	lastRequest uint64
+	testSummary string
 }
 
 func New(client *api.Client) Model {
+	return NewWithTestURL(client, "")
+}
+
+func NewWithTestURL(client *api.Client, testURL string) Model {
 	return Model{
 		client:    client,
+		testURL:   testURL,
 		sortMode:  SortDefault,
 		testMode:  probe.ModeHTTP,
 		endpoints: probe.NewEndpoints(),
 		focus:     focusGroups,
+		inflight:  make(map[string]uint64),
 	}
+}
+
+// probeKey identifies one test target: a whole group when node is empty.
+func probeKey(group string, mode probe.Mode, node string) string {
+	return group + "\x00" + mode.String() + "\x00" + node
+}
+
+func (m *Model) track(key string) uint64 {
+	if m.inflight == nil {
+		m.inflight = make(map[string]uint64)
+	}
+	m.lastRequest++
+	m.inflight[key] = m.lastRequest
+	return m.lastRequest
+}
+
+// settle reports whether a reply is the newest request for key and, if so,
+// marks that key as no longer in flight.
+func (m *Model) settle(key string, id uint64) bool {
+	if m.inflight[key] != id {
+		return false
+	}
+	delete(m.inflight, key)
+	return true
+}
+
+func (g *groupState) modeDelays(mode probe.Mode) map[string]messages.DelayResult {
+	if g.delays == nil {
+		g.delays = make(map[probe.Mode]map[string]messages.DelayResult)
+	}
+	if g.delays[mode] == nil {
+		g.delays[mode] = make(map[string]messages.DelayResult)
+	}
+	return g.delays[mode]
+}
+
+func (m *Model) groupByName(name string) *groupState {
+	for i := range m.groups {
+		if m.groups[i].group.Name == name {
+			return &m.groups[i]
+		}
+	}
+	return nil
 }
 
 func (s SortMode) String() string {
@@ -125,32 +191,27 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.mode = msg.Config.Mode
 		}
 	case messages.GroupDelayMsg:
-		if msg.Err == nil {
-			for i := range m.groups {
-				if m.groups[i].group.Name == msg.Group {
-					if m.groups[i].delays == nil {
-						m.groups[i].delays = make(map[string]int)
-					}
-					for k, v := range msg.Result {
-						m.groups[i].delays[k] = v
-					}
-					break
+		if !m.settle(probeKey(msg.Group, msg.Mode, ""), msg.RequestID) {
+			break
+		}
+		m.testSummary = summarizeGroupTest(msg.Group, msg.Mode, msg.Results)
+		if g := m.groupByName(msg.Group); g != nil {
+			dst := g.modeDelays(msg.Mode)
+			for node, r := range msg.Results {
+				// A single-node test started since then owns that row.
+				if _, busy := m.inflight[probeKey(msg.Group, msg.Mode, node)]; busy {
+					continue
 				}
+				dst[node] = r
 			}
 		}
 	case messages.ProxyDelayMsg:
-		if msg.Err == nil {
-			for i := range m.groups {
-				for _, name := range m.groups[i].group.All {
-					if name == msg.Name {
-						if m.groups[i].delays == nil {
-							m.groups[i].delays = make(map[string]int)
-						}
-						m.groups[i].delays[msg.Name] = msg.Delay
-						break
-					}
-				}
-			}
+		if !m.settle(probeKey(msg.Group, msg.Mode, msg.Name), msg.RequestID) {
+			break
+		}
+		m.testSummary = fmt.Sprintf("%s %s: %s", strings.ToUpper(msg.Mode.String()), styles.SafeText(msg.Name), describeDelay(msg.Result))
+		if g := m.groupByName(msg.Group); g != nil {
+			g.modeDelays(msg.Mode)[msg.Name] = msg.Result
 		}
 	case messages.ProxySelectedMsg:
 		if msg.Err == nil {
@@ -178,7 +239,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
-	case "left", "h":
+	case "left", "h", "esc":
 		m.focus = focusGroups
 	case "right", "l":
 		if len(m.visibleGroups()) > 0 {
@@ -231,16 +292,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.focus == focusGroups {
-			return m, m.testGroup(*group)
+			return m.startGroupTest(*group)
 		}
 		nodes := m.currentNodes()
 		if m.nodeCursor < len(nodes) {
-			return m, m.testNode(nodes[m.nodeCursor])
+			return m.startNodeTest(*group, nodes[m.nodeCursor])
 		}
 	case "D":
+		group := m.selectedGroup()
 		nodes := m.currentNodes()
-		if m.nodeCursor < len(nodes) {
-			return m, m.testNode(nodes[m.nodeCursor])
+		if group != nil && m.nodeCursor < len(nodes) {
+			return m.startNodeTest(*group, nodes[m.nodeCursor])
 		}
 	case "T":
 		m.testMode = m.testMode.Next()
@@ -312,6 +374,13 @@ func (m Model) View() string {
 	bodyHeight := m.proxyBodyHeight()
 	groupW, nodeW := m.panelWidths()
 
+	if m.singlePanel() {
+		panel := m.renderGroupsPanel(m.usableWidth(), bodyHeight)
+		if m.focus == focusNodes {
+			panel = m.renderNodesPanel(m.usableWidth(), bodyHeight)
+		}
+		return strings.Join(append(headerLines, panel), "\n")
+	}
 	left := m.renderGroupsPanel(groupW, bodyHeight)
 	right := m.renderNodesPanel(nodeW, bodyHeight)
 
@@ -323,6 +392,10 @@ func (m Model) renderHeaderLines() []string {
 	modes := []string{"rule", "global", "direct"}
 	tabs := make([]string, 0, len(modes))
 	for _, mode := range modes {
+		// A narrow pane keeps only the active mode; the others are not keys here.
+		if m.singlePanel() && mode != m.mode {
+			continue
+		}
 		label := strings.ToUpper(mode)
 		tabs = append(tabs, styles.Badge(label, mode == m.mode))
 	}
@@ -339,9 +412,16 @@ func (m Model) renderHeaderLines() []string {
 		}
 	}
 
+	testInfo += "  " + styles.Faint.Render(m.focusHint())
+	if n := len(m.inflight); n > 0 {
+		testInfo += "  " + styles.StateBadge(fmt.Sprintf("TESTING %d", n), "warn")
+	} else if m.testSummary != "" {
+		testInfo += "  " + styles.Faint.Render(m.testSummary)
+	}
+
 	lines := []string{
 		styles.PageHeader("Proxy Matrix", meta, max(m.width-2, 20)),
-		strings.Join(tabs, " ") + "  " + testInfo + "  " + styles.Faint.Render("focus "+m.focus),
+		ansi.Truncate(strings.Join(tabs, " ")+"  "+testInfo, m.usableWidth(), ""),
 		styles.Divider(max(m.width-2, 1)),
 	}
 	if m.filtering {
@@ -400,7 +480,7 @@ func (m Model) renderGroupsPanel(width, height int) string {
 	if m.focus == focusGroups {
 		box = styles.ProxyGroupBoxSelected
 	}
-	return box.Width(max(width-panelChromeWidth, 1)).Height(bodyH).Render(strings.Join(lines, "\n"))
+	return box.Width(max(width-panelBorderWidth, 1)).Height(bodyH).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) renderNodesPanel(width, height int) string {
@@ -411,13 +491,13 @@ func (m Model) renderNodesPanel(width, height int) string {
 		if m.focus == focusNodes {
 			box = styles.ProxyGroupBoxSelected
 		}
-		return box.Width(max(width-panelChromeWidth, 1)).Height(bodyH).Render(
+		return box.Width(max(width-panelBorderWidth, 1)).Height(bodyH).Render(
 			styles.PanelTitle("Nodes") + "\n" + styles.EmptyState("No proxy group", "Refresh after the core is available.", width-panelChromeWidth),
 		)
 	}
 
 	nodes := m.currentNodes()
-	titleText := fmt.Sprintf(" %s  %s  now %s ", group.Name, group.Type, truncateDisplayWidth(group.Now, max(width-28, 8)))
+	titleText := fmt.Sprintf(" %s  %s  now %s ", styles.SafeText(group.Name), styles.SafeText(group.Type), truncateDisplayWidth(styles.SafeText(group.Now), max(width-28, 8)))
 	title := styles.ProxyGroupHeader.Render(titleText)
 	if m.focus == focusNodes {
 		title = styles.ProxyGroupHeaderSelected.Render(titleText)
@@ -433,7 +513,7 @@ func (m Model) renderNodesPanel(width, height int) string {
 	if len(nodes) == 0 {
 		content = title + "\n" + styles.EmptyState("No nodes match the current filter.", "Try a name or delay predicate such as delay<200.", width-panelChromeWidth)
 	}
-	return box.Width(max(width-panelChromeWidth, 1)).Height(bodyH).Render(content)
+	return box.Width(max(width-panelBorderWidth, 1)).Height(bodyH).Render(content)
 }
 
 func (m Model) renderNodeTable(innerWidth, bodyHeight int) string {
@@ -468,11 +548,17 @@ func (m Model) renderNodeTable(innerWidth, bodyHeight int) string {
 
 func (m Model) renderNodeRow(name string, idx, nameW, delayW, stateW, innerWidth int) string {
 	group := m.selectedGroup()
-	delay := 0
+	delayText := styles.DelayNone.Render("--")
 	current := ""
 	fixed := ""
 	if group != nil {
-		delay = getDelay(name, m.selectedGroupState().delays)
+		r, tested := m.selectedGroupState().delays[m.testMode][name]
+		switch {
+		case m.testing(group.Name, name):
+			delayText = styles.Faint.Render("testing")
+		case tested:
+			delayText = renderDelay(r)
+		}
 		current = group.Now
 		fixed = group.Fixed
 	}
@@ -489,7 +575,6 @@ func (m Model) renderNodeRow(name string, idx, nameW, delayW, stateW, innerWidth
 	if name == fixed && fixed != "" {
 		state = styles.DelaySlow.Render("pinned")
 	}
-	delayText := styles.DelayStyle(delay).Render(styles.FormatDelay(delay))
 	line := prefix +
 		styles.PadRight(name, nameW) + " " +
 		lipgloss.NewStyle().Width(delayW).Align(lipgloss.Right).Render(delayText) + " " +
@@ -519,10 +604,7 @@ func (m *Model) rebuildGroups(groups []api.Group) {
 			})
 			continue
 		}
-		m.groups = append(m.groups, groupState{
-			group:  g,
-			delays: make(map[string]int),
-		})
+		m.groups = append(m.groups, groupState{group: g})
 	}
 }
 
@@ -564,7 +646,7 @@ func (m Model) sortedNodes(gi int) []string {
 			return strings.ToLower(nodes[i]) < strings.ToLower(nodes[j])
 		})
 	case SortByDelay:
-		delays := m.groups[gi].delays
+		delays := m.groups[gi].delays[m.testMode]
 		sort.Slice(nodes, func(i, j int) bool {
 			di := getDelay(nodes[i], delays)
 			dj := getDelay(nodes[j], delays)
@@ -597,7 +679,7 @@ func (m Model) visibleGroups() []visibleGroup {
 			delayQ := isDelayQuery(filter)
 			filtered := make([]string, 0, len(nodes))
 			for _, name := range nodes {
-				if matchNode(name, getDelay(name, g.delays), filter) {
+				if matchNode(name, getDelay(name, g.delays[m.testMode]), filter) {
 					filtered = append(filtered, name)
 				}
 			}
@@ -713,19 +795,90 @@ func nodeRowsForTableHeight(tableHeight int) int {
 	return max(tableHeight-nodeTableHeaderHeight-nodeTableBottomSlack, 1)
 }
 
+// usableWidth is the page width minus the root content padding, matching the
+// width-2 the header and other pages render to.
+func (m Model) usableWidth() int {
+	return max(m.width-2, 1)
+}
+
+func (m Model) singlePanel() bool {
+	return m.usableWidth() < twoPanelMinWidth
+}
+
+func (m Model) focusHint() string {
+	if m.singlePanel() && m.focus == focusNodes {
+		return "Esc groups"
+	}
+	return "focus " + m.focus
+}
+
 func (m Model) panelWidths() (int, int) {
-	available := max(m.width-proxyPanelGap, groupPanelMinWidth+20)
+	available := max(m.usableWidth()-proxyPanelGap, groupPanelMinWidth+20)
 	groupW := available / 3
 	groupW = clamp(groupW, groupPanelMinWidth, groupPanelMaxWidth)
 	nodeW := max(available-groupW, 24)
 	return groupW, nodeW
 }
 
-func getDelay(name string, delays map[string]int) int {
-	if delays == nil {
-		return 0
+// getDelay returns the measured delay, or 0 for an untested, timed-out,
+// skipped, or failed node, so sorting and delay filters treat them alike.
+func getDelay(name string, delays map[string]messages.DelayResult) int {
+	if r, ok := delays[name]; ok && r.Status == messages.DelayOK {
+		return r.Delay
 	}
-	return delays[name]
+	return 0
+}
+
+func (m Model) testing(group, node string) bool {
+	_, whole := m.inflight[probeKey(group, m.testMode, "")]
+	_, single := m.inflight[probeKey(group, m.testMode, node)]
+	return whole || single
+}
+
+// renderDelay labels every outcome in text so the column does not rely on
+// color alone.
+func renderDelay(r messages.DelayResult) string {
+	switch r.Status {
+	case messages.DelayOK:
+		return styles.DelayStyle(r.Delay).Render(styles.FormatDelay(r.Delay))
+	case messages.DelayTimeout:
+		return styles.DelayBad.Render("timeout")
+	case messages.DelaySkipped:
+		return styles.DelayNone.Render("skipped")
+	default:
+		return styles.DelayBad.Render("error")
+	}
+}
+
+func describeDelay(r messages.DelayResult) string {
+	switch r.Status {
+	case messages.DelayOK:
+		return styles.FormatDelay(r.Delay)
+	case messages.DelaySkipped:
+		return "skipped (" + r.Reason + ")"
+	default:
+		return string(r.Status) + " (" + r.Reason + ")"
+	}
+}
+
+// summarizeGroupTest counts every requested node by outcome so a probe that
+// skipped or failed nodes never reads as a clean pass.
+func summarizeGroupTest(group string, mode probe.Mode, results map[string]messages.DelayResult) string {
+	prefix := strings.ToUpper(mode.String()) + " " + styles.SafeText(group) + ": "
+	if len(results) == 0 {
+		return prefix + "no nodes to test"
+	}
+	counts := map[messages.DelayStatus]int{}
+	for _, r := range results {
+		counts[r.Status]++
+	}
+	parts := []string{fmt.Sprintf("%d/%d ok", counts[messages.DelayOK], len(results))}
+	for _, s := range []messages.DelayStatus{messages.DelayTimeout, messages.DelayError, messages.DelaySkipped} {
+		if counts[s] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[s], s))
+		}
+	}
+	return prefix + strings.Join(parts, ", ")
 }
 
 // isDelayQuery reports whether a filter is a delay predicate (delay<N, delay>N,
@@ -817,87 +970,146 @@ func (m Model) selectProxy(group, proxy string) tea.Cmd {
 	}
 }
 
-// testGroup tests every node in a group using the active test mode.
-func (m Model) testGroup(group api.Group) tea.Cmd {
-	if m.testMode.NeedsEndpoints() {
-		return m.testGroupProbe(group)
+func (m Model) startGroupTest(group api.Group) (Model, tea.Cmd) {
+	id := m.track(probeKey(group.Name, m.testMode, ""))
+	return m, m.testGroup(group, id)
+}
+
+func (m Model) startNodeTest(group api.Group, node string) (Model, tea.Cmd) {
+	id := m.track(probeKey(group.Name, m.testMode, node))
+	return m, m.testNode(group, node, id)
+}
+
+// groupTestURL prefers the group's own testUrl and falls back to the configured
+// default; an empty result lets the client use its built-in URL.
+func (m Model) groupTestURL(group api.Group) string {
+	if group.TestURL != "" {
+		return group.TestURL
 	}
-	name, testURL := group.Name, group.TestURL
+	return m.testURL
+}
+
+// testGroup tests every node in a group using the active test mode and returns
+// an outcome for each requested node.
+func (m Model) testGroup(group api.Group, id uint64) tea.Cmd {
+	mode := m.testMode
+	if mode.NeedsEndpoints() {
+		return m.testGroupProbe(group, id)
+	}
+	client, name, testURL := m.client, group.Name, m.groupTestURL(group)
+	nodes := append([]string(nil), group.All...)
 	return func() tea.Msg {
-		result, err := m.client.TestGroupDelay(name, testURL, 0)
-		return messages.GroupDelayMsg{Group: name, Result: result, Err: err}
+		delays, err := client.TestGroupDelay(name, testURL, 0)
+		return messages.GroupDelayMsg{Group: name, Mode: mode, RequestID: id, Results: groupHTTPResults(nodes, delays, err), Err: err}
 	}
 }
 
-// testNode tests a single node using the active test mode.
-func (m Model) testNode(name string) tea.Cmd {
-	mode, ep := m.testMode, m.endpoints
-	testURL := ""
-	if g := m.selectedGroup(); g != nil {
-		testURL = g.TestURL
+// groupHTTPResults maps mihomo's group delay reply onto every requested node.
+// mihomo lists only nodes that answered, so a missing node timed out.
+func groupHTTPResults(nodes []string, delays api.GroupDelayResult, err error) map[string]messages.DelayResult {
+	results := make(map[string]messages.DelayResult, len(nodes))
+	for _, n := range nodes {
+		d, ok := delays[n]
+		switch {
+		case err != nil:
+			results[n] = delayFailure(err)
+		case ok && d > 0:
+			results[n] = messages.DelayResult{Delay: d, Status: messages.DelayOK}
+		default:
+			results[n] = messages.DelayResult{Status: messages.DelayTimeout, Reason: "no reply within the test timeout"}
+		}
 	}
+	return results
+}
+
+// testNode tests a single node using the active test mode.
+func (m Model) testNode(group api.Group, name string, id uint64) tea.Cmd {
+	mode, ep, client := m.testMode, m.endpoints, m.client
+	groupName, testURL := group.Name, m.groupTestURL(group)
 	if mode.NeedsEndpoints() {
 		return func() tea.Msg {
-			d, err := probePing(ep, mode, name)
-			return messages.ProxyDelayMsg{Name: name, Delay: d, Err: err}
+			return messages.ProxyDelayMsg{Group: groupName, Name: name, Mode: mode, RequestID: id, Result: probeNode(ep, mode, name)}
 		}
 	}
 	return func() tea.Msg {
-		result, err := m.client.TestProxyDelay(name, testURL, 0)
-		delay := 0
-		if result != nil {
-			delay = result.Delay
+		msg := messages.ProxyDelayMsg{Group: groupName, Name: name, Mode: mode, RequestID: id}
+		result, err := client.TestProxyDelay(name, testURL, 0)
+		switch {
+		case err != nil:
+			msg.Result, msg.Err = delayFailure(err), err
+		case result == nil || result.Delay <= 0:
+			msg.Result = messages.DelayResult{Status: messages.DelayTimeout, Reason: "no reply within the test timeout"}
+		default:
+			msg.Result = messages.DelayResult{Delay: result.Delay, Status: messages.DelayOK}
 		}
-		return messages.ProxyDelayMsg{Name: name, Delay: delay, Err: err}
+		return msg
 	}
 }
 
 // testGroupProbe runs TCP/ICMP pings across all leaf nodes of a group with
-// bounded concurrency (large groups can hold 140+ nodes).
-func (m Model) testGroupProbe(group api.Group) tea.Cmd {
+// bounded concurrency (large groups can hold 140+ nodes). Nodes without a known
+// server, such as sub-groups, are reported as skipped rather than dropped.
+func (m Model) testGroupProbe(group api.Group, id uint64) tea.Cmd {
 	mode, ep := m.testMode, m.endpoints
 	nodes := append([]string(nil), group.All...)
 	name := group.Name
 	return func() tea.Msg {
-		result := make(api.GroupDelayResult, len(nodes))
+		results := make(map[string]messages.DelayResult, len(nodes))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, probeConcurrency)
 		for _, n := range nodes {
-			if _, ok := ep.Lookup(n); !ok {
-				continue // sub-group or unknown server; skip
-			}
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(n string) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				d, _ := probePing(ep, mode, n)
+				r := probeNode(ep, mode, n)
 				mu.Lock()
-				result[n] = d
+				results[n] = r
 				mu.Unlock()
 			}(n)
 		}
 		wg.Wait()
-		return messages.GroupDelayMsg{Group: name, Result: result}
+		return messages.GroupDelayMsg{Group: name, Mode: mode, RequestID: id, Results: results}
 	}
 }
 
-func probePing(ep *probe.Endpoints, mode probe.Mode, name string) (int, error) {
+func probeNode(ep *probe.Endpoints, mode probe.Mode, name string) messages.DelayResult {
 	if ep == nil {
-		return 0, fmt.Errorf("no endpoints loaded")
+		return messages.DelayResult{Status: messages.DelayError, Reason: "node endpoints not loaded"}
 	}
 	e, ok := ep.Lookup(name)
 	if !ok {
-		return 0, fmt.Errorf("unknown server for %s", name)
+		return messages.DelayResult{Status: messages.DelaySkipped, Reason: "no server address (sub-group or unknown node)"}
 	}
+	var d int
+	var err error
 	switch mode {
 	case probe.ModeTCP:
-		return probe.TCPPing(e.Server, e.Port, probeTimeout)
+		d, err = probe.TCPPing(e.Server, e.Port, probeTimeout)
 	case probe.ModeICMP:
-		return probe.ICMPPing(e.Server, probeTimeout)
+		d, err = probe.ICMPPing(e.Server, probeTimeout)
+	default:
+		err = fmt.Errorf("%s is not a probe mode", mode)
 	}
-	return 0, fmt.Errorf("not a probe mode")
+	if err != nil {
+		return delayFailure(err)
+	}
+	return messages.DelayResult{Delay: d, Status: messages.DelayOK}
+}
+
+// delayFailure separates a timeout (504 from mihomo, or a network deadline)
+// from any other failure.
+func delayFailure(err error) messages.DelayResult {
+	reason := styles.SafeText(err.Error())
+	var se *api.StatusError
+	var ne net.Error
+	if (errors.As(err, &se) && se.Code == http.StatusGatewayTimeout) ||
+		(errors.As(err, &ne) && ne.Timeout()) || errors.Is(err, probe.ErrTimeout) {
+		return messages.DelayResult{Status: messages.DelayTimeout, Reason: reason}
+	}
+	return messages.DelayResult{Status: messages.DelayError, Reason: reason}
 }
 
 // unfixGroup clears a URLTest/Fallback group's fixed node, then refetches.

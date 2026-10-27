@@ -1,7 +1,10 @@
 package home
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -25,12 +28,15 @@ type Model struct {
 	width       int
 	height      int
 	err         error
+	streamState string
+	streamLast  time.Time
 }
 
 func New(client *api.Client) Model {
 	return Model{
-		client:    client,
-		startTime: time.Now(),
+		client:      client,
+		startTime:   time.Now(),
+		streamState: "connecting",
 	}
 }
 
@@ -55,6 +61,15 @@ func (m Model) SetStats(memory int64, activeConns int) Model {
 	return m
 }
 
+// SetStreamState records whether live controller data is current. REST data can
+// still be present while streams reconnect, so connectivity and freshness are
+// intentionally separate.
+func (m Model) SetStreamState(state string, last time.Time) Model {
+	m.streamState = state
+	m.streamLast = last
+	return m
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case messages.ConfigMsg:
@@ -70,23 +85,25 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.ruleCount = len(msg.Rules.Rules)
 		}
 	case messages.ConfigPatchedMsg:
-		if msg.Err == nil {
-			return m, m.fetchConfig()
+		if msg.Config != nil {
+			m.config = msg.Config
 		}
-		m.err = msg.Err
+		if msg.Err != nil {
+			m.err = msg.Err
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "t":
 			if m.config != nil {
 				enabled := !m.config.TUN.Enable
-				return m, m.patchConfig(api.ConfigPatch{
+				return m, messages.RequestConfigChange("TUN "+onOff(enabled), api.ConfigPatch{
 					TUN: &api.TUNConfig{Enable: enabled},
 				})
 			}
 		case "m":
 			if m.config != nil {
 				next := cycleMode(m.config.Mode)
-				return m, m.patchConfig(api.ConfigPatch{Mode: &next})
+				return m, messages.RequestConfigChange("Mode "+next, api.ConfigPatch{Mode: &next})
 			}
 		case "r":
 			return m, tea.Batch(m.fetchConfig(), m.fetchVersion(), m.fetchRuleCount())
@@ -104,7 +121,7 @@ func (m Model) View() string {
 	online := m.version != nil && m.config != nil
 	meta := "waiting for mihomo"
 	if online {
-		meta = "controller online"
+		meta = m.streamMeta()
 	}
 
 	header := styles.PageHeader("Core Cockpit", meta, width)
@@ -125,7 +142,11 @@ func (m Model) View() string {
 
 	if m.err != nil {
 		errMsg := styles.ErrorLine(m.err, width)
-		content = lipgloss.JoinVertical(lipgloss.Left, header, styles.Divider(width), "", errMsg, "", controls, "", core, "", system)
+		errorBlock := errMsg
+		if !online {
+			errorBlock += "\n" + styles.Faint.Render(styles.Fit(offlineHint(m.err), width))
+		}
+		content = lipgloss.JoinVertical(lipgloss.Left, header, styles.Divider(width), "", errorBlock, "", controls, "", core, "", system)
 	}
 
 	return content
@@ -140,8 +161,10 @@ func (m Model) renderControls(width int) string {
 	} else {
 		tun, mode, lan = dash(), dash(), dash()
 	}
-	if m.version != nil && m.config != nil {
+	if m.version != nil && m.config != nil && m.streamState == "live" {
 		state = styles.StateBadge("ONLINE", "ok")
+	} else if m.version != nil && m.config != nil {
+		state = styles.StateBadge("DEGRADED", "warn")
 	} else {
 		state = styles.StateBadge("OFFLINE", "bad")
 	}
@@ -155,16 +178,18 @@ func (m Model) renderControls(width int) string {
 }
 
 func (m Model) renderCore(width int) string {
-	coreVer := valueOr(func() string { return m.version.Version }, m.version != nil)
+	coreVer := valueOr(func() string { return styles.SafeText(m.version.Version) }, m.version != nil)
 	status := styles.DelayBad.Render("disconnected")
-	if m.version != nil && m.config != nil {
+	if m.version != nil && m.config != nil && m.streamState == "live" {
 		status = styles.DelayFast.Render("connected")
+	} else if m.version != nil && m.config != nil {
+		status = styles.DelaySlow.Render("reconnecting")
 	}
 	var proxyAddr, mixedPort, mode2 string
 	if m.config != nil {
 		proxyAddr = fmt.Sprintf("127.0.0.1:%d", m.config.MixedPort)
 		mixedPort = fmt.Sprintf("%d", m.config.MixedPort)
-		mode2 = m.config.Mode
+		mode2 = styles.SafeText(m.config.Mode)
 	} else {
 		proxyAddr, mixedPort, mode2 = "--", "--", "--"
 	}
@@ -185,7 +210,7 @@ func (m Model) renderCore(width int) string {
 func (m Model) renderSystem(width int) string {
 	body := strings.Builder{}
 	body.WriteString(infoRow("Host", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)))
-	body.WriteString(infoRow("Endpoint", m.client.SocketPath()))
+	body.WriteString(infoRow("Endpoint", styles.SafeText(m.client.SocketPath())))
 	body.WriteString(infoRow("Go", runtime.Version()))
 	body.WriteString(styles.Faint.Render("Use CLI subcommands for scripts: status, proxies, nodes, switch, test, mode, restart."))
 	return panel("Environment", strings.TrimRight(body.String(), "\n"), width)
@@ -212,11 +237,11 @@ func (m Model) fetchRuleCount() tea.Cmd {
 	}
 }
 
-func (m Model) patchConfig(patch api.ConfigPatch) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.PatchConfig(patch)
-		return messages.ConfigPatchedMsg{Err: err}
+func onOff(on bool) string {
+	if on {
+		return "on"
 	}
+	return "off"
 }
 
 func renderToggle(on bool) string {
@@ -249,7 +274,7 @@ func infoRow(label, value string) string {
 }
 
 func cycleMode(current string) string {
-	switch current {
+	switch strings.ToLower(current) {
 	case "rule":
 		return "global"
 	case "global":
@@ -257,6 +282,37 @@ func cycleMode(current string) string {
 	default:
 		return "rule"
 	}
+}
+
+func offlineHint(err error) string {
+	if errors.Is(err, os.ErrNotExist) || strings.Contains(strings.ToLower(err.Error()), "no such file") {
+		return "Socket missing. Start mihomo or use --socket PATH. r retry."
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "Controller timed out. Check the endpoint or SSH tunnel. r retry."
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "status 401"), strings.Contains(text, "status 403"), strings.Contains(text, "unauthorized"):
+		return "Authentication rejected. Check the configured secret. r retry."
+	case strings.Contains(text, "connection refused"):
+		return "Connection refused. Check the address and controller service. r retry."
+	default:
+		return "Check the controller endpoint and access settings. r retry."
+	}
+}
+
+func (m Model) streamMeta() string {
+	state := m.streamState
+	if state == "" {
+		state = "connecting"
+	}
+	meta := "streams " + state
+	if !m.streamLast.IsZero() {
+		meta += " · last " + m.streamLast.Format("15:04:05")
+	}
+	return meta
 }
 
 func formatDuration(d time.Duration) string {

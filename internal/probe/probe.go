@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
@@ -9,6 +10,9 @@ import (
 
 	probing "github.com/prometheus-community/pro-bing"
 )
+
+// ErrTimeout reports that a probe got no reply before its deadline.
+var ErrTimeout = errors.New("timeout")
 
 // Mode selects how node latency is measured.
 type Mode int
@@ -92,7 +96,7 @@ func ICMPPing(host string, timeout time.Duration) (int, error) {
 	}
 	stats := pinger.Statistics()
 	if stats.PacketsRecv == 0 {
-		return 0, fmt.Errorf("timeout")
+		return 0, ErrTimeout
 	}
 	ms := int(stats.AvgRtt.Milliseconds())
 	if ms < 1 {

@@ -28,8 +28,7 @@ func (m Model) SetWidth(w int) Model {
 }
 
 func (m Model) View(page messages.Page) string {
-	bindings := globalBindings()
-	bindings = append(bindings, pageBindings(page)...)
+	bindings := prioritizedBindings(page)
 	innerW := max(m.width-2, 1)
 
 	var parts []string
@@ -41,14 +40,23 @@ func (m Model) View(page messages.Page) string {
 	return styles.HelpBar.Width(innerW).Render(content)
 }
 
-func globalBindings() []Binding {
-	return []Binding{
-		{Key: "q", Desc: "quit"},
-		{Key: "Tab", Desc: "page"},
-		{Key: "?", Desc: "keys"},
-		{Key: "r", Desc: "refresh"},
-		{Key: "R", Desc: "restart"},
-	}
+// prioritizedBindings keeps the current task discoverable when an SSH pane is
+// too narrow to show every shortcut. The full list remains available with ?.
+func prioritizedBindings(page messages.Page) []Binding {
+	pageKeys := pageBindings(page)
+	primaryCount := min(2, len(pageKeys))
+	bindings := append([]Binding(nil), pageKeys[:primaryCount]...)
+	bindings = append(bindings,
+		Binding{Key: "?", Desc: "more"},
+	)
+	bindings = append(bindings, pageKeys[primaryCount:]...)
+	bindings = append(bindings,
+		Binding{Key: "Tab", Desc: "page"},
+		Binding{Key: "r", Desc: "refresh"},
+		Binding{Key: "q", Desc: "quit"},
+		Binding{Key: "R", Desc: "restart"},
+	)
+	return bindings
 }
 
 func pageBindings(page messages.Page) []Binding {
@@ -86,7 +94,7 @@ func pageBindings(page messages.Page) []Binding {
 		}
 	case messages.PageLogs:
 		return []Binding{
-			{Key: "space", Desc: "pause"},
+			{Key: "space", Desc: "freeze"},
 			{Key: "l", Desc: "level"},
 			{Key: "c", Desc: "clear"},
 			{Key: "/", Desc: "filter"},

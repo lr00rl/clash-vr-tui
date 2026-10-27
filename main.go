@@ -60,7 +60,7 @@ func main() {
 	}
 
 	client := api.NewWith(resolved.Endpoint)
-	model := app.NewModel(client)
+	model := app.NewModel(client, resolved.TestURL)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
