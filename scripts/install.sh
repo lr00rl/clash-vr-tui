@@ -59,8 +59,8 @@ checksum() {
 
 	line="$(grep -F "  $asset" "$checksums" | head -n 1 || true)"
 	if [ -z "$line" ]; then
-		echo "warning: checksum entry not found for $asset; skipping verification" >&2
-		return
+		echo "error: checksum entry not found for $asset" >&2
+		exit 1
 	fi
 
 	printf '%s\n' "$line" >"$checksums.one"
@@ -69,7 +69,8 @@ checksum() {
 	elif command -v shasum >/dev/null 2>&1; then
 		(cd "$(dirname "$file")" && shasum -a 256 -c "$checksums.one")
 	else
-		echo "warning: sha256sum or shasum not found; skipping verification" >&2
+		echo "error: sha256sum or shasum is required to verify the release" >&2
+		exit 1
 	fi
 }
 
