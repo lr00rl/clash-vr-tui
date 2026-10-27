@@ -56,24 +56,39 @@ clash-vr-tui status
 
 ## Features
 
-- **Home** — core status, version, mode, ports, live memory and active-connection
+- **Home**: core status, version, mode, ports, live memory and active-connection
   count, restart the core (`R`).
-- **Proxies** — two-panel groups / nodes view for 140+ node groups:
+- **Proxies**: two-panel groups / nodes view for 140+ node groups. In panes
+  narrower than about 80 columns it shows one panel at a time: `Enter` opens the
+  selected group's nodes and `Esc` or `h` returns to the group list.
   - select a node (`Enter`), color-coded delays, sort by default/name/delay (`o`)
+  - every test reports each node as a delay, `timeout`, `skipped` (no known
+    server, such as a sub-group), or `error`, and the header shows a count such
+    as `HTTP Auto: 16/18 ok, 2 timeout`. Results are kept per test mode, so an
+    HTTP delay never appears in the TCP or ICMP view.
   - **three latency test modes** cycled with `T`:
-    - **HTTP** — mihomo's delay test through the tunnel (per-group test URL)
-    - **TCP** — raw connect to the node's `server:port`
-    - **ICMP** — echo round-trip to the node's server
+    - **HTTP**: mihomo's delay test through the tunnel (the group's own test
+      URL, else the configured `test-url`)
+    - **TCP**: raw connect to the node's `server:port`
+    - **ICMP**: echo round-trip to the node's server
   - delay-aware filtering: `delay<200`, `delay>500`, `delay=timeout`, or a name
     substring (`/`)
   - unpin a URLTest/Fallback group back to auto (`u`)
-- **Connections** — live connection table with per-connection speed, sort, filter,
+- **Connections**: live connection table with per-connection speed, sort, filter,
   close one (`x`) / all (`X`), and a detail view (`Enter`).
-- **Rules** — searchable routing rules.
-- **Logs** — live `WS /logs` stream with level filter (`l`), text filter (`/`),
-  pause (`space`), and clear (`c`).
-- **Config** — terminal-safe controls for TUN, LAN exposure, log level, mixed
-  port and runtime mode.
+- **Rules**: searchable routing rules.
+- **Logs**: live `WS /logs` stream with level filter (`l`), text filter (`/`),
+  freeze (`space`), and clear (`c`). Freezing stops the view, not collection;
+  lines that overflow the bounded buffer are counted as dropped.
+- **Config**: toggles for TUN and LAN exposure and a log level picker. Mixed
+  port and mode are shown read-only here; change the mode with `m` on Home or
+  `clash-vr-tui mode`.
+- **Confirmation and read-back**: enabling LAN, turning TUN off, and switching to
+  global or direct mode ask for `y` first. After any config change the TUI reads
+  the controller back and reports whether the change actually held.
+- **Stream health**: the status bar shows `LIVE` while traffic and connection
+  streams are current and `STALE` with the last update time while they
+  reconnect.
 
 > **Note on TCP/ICMP:** the mihomo API does not expose node server addresses, so
 > these modes parse the running mihomo config to find each `server:port`. They
@@ -85,9 +100,10 @@ clash-vr-tui status
 
 ### Release installer
 
-The installer downloads a release archive, verifies it against `checksums.txt`
-when `sha256sum` or `shasum` is available, and installs to `~/.local/bin` by
-default.
+The installer downloads a release archive, verifies it against `checksums.txt`,
+and installs to `~/.local/bin` by default. It stops without installing if the
+checksum entry is missing, does not match, or neither `sha256sum` nor `shasum` is
+available.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lr00rl/clash-vr-tui/main/scripts/install.sh | sh
@@ -199,6 +215,21 @@ clash-vr-tui --server 127.0.0.1:9090 --secret mypw --config-path /etc/mihomo/con
 `--config-path` is only needed for TCP/ICMP node probes; normal status, proxy
 switching, rules, logs and connections use the controller API directly.
 
+### Secrets and remote controllers
+
+The controller API is plain HTTP and WebSocket, so `clash-vr-tui` refuses to send
+a secret to a non-loopback TCP address. To reach a remote core, forward its
+controller over SSH and connect to the local end:
+
+```sh
+ssh -N -L 9090:127.0.0.1:9090 user@router
+clash-vr-tui --server 127.0.0.1:9090 --secret-file ~/.config/mihomo/secret
+```
+
+`--secret-file` (or `CLASH_VR_TUI_SECRET_FILE`, or `secret-file:` in the config
+file) reads the secret from a file so it stays out of shell history and the
+process list. `--secret` still works.
+
 If you expose `external-controller-unix`, pass its socket path:
 
 ```sh
@@ -231,31 +262,41 @@ clash-vr-tui status --json | jq .mode
 | Scope | Keys |
 |-------|------|
 | Global | `Tab`/`Shift+Tab` page · `1`–`6` jump · `?` help · `r` refresh · `R` restart core · `q`/`Ctrl+C` quit |
-| Proxies | `←→`/`hl` panel · `j`/`k` move · `Ctrl+d`/`Ctrl+u` half-page · `g`/`G` top/bottom · `Enter` select · `d`/`D` test · `T` test mode · `o` sort · `u` unpin · `/` filter |
+| Proxies | `←→`/`hl` panel · `Esc` back to groups · `j`/`k` move · `Ctrl+d`/`Ctrl+u` half-page · `g`/`G` top/bottom · `Enter` select · `d`/`D` test · `T` test mode · `o` sort · `u` unpin · `/` filter |
 | Connections | `Enter` detail · `x` close · `X` close all · `s` sort · `/` filter |
 | Rules | `g`/`G` top/bottom · `/` filter |
-| Logs | `space` pause · `l` level · `c` clear · `/` filter |
+| Logs | `space` freeze · `l` level · `c` clear · `/` filter |
 | Config | `Enter` edit · `Space` toggle · `j`/`k` move |
 
 While a filter input is open, every key (including `q`) types into it; `Esc`
-closes it. `Ctrl+C` always quits.
+closes it. `Ctrl+C` always quits. The `?` help overlay scrolls with `j`/`k`,
+`Ctrl+d`/`Ctrl+u`, and `g`/`G`.
 
 ## Configuration
 
-Connection settings resolve from **flags > env > config file > defaults**:
+Connection settings resolve from **flags > env > config file > defaults**. The
+endpoint and its secret are chosen together: the first tier that names a socket
+or server also supplies the secret, so a secret from the config file is never
+sent to a server given on the command line.
 
-- env: `CLASH_VR_TUI_SOCKET`, `CLASH_VR_TUI_SERVER`, `CLASH_VR_TUI_SECRET`
+- env: `CLASH_VR_TUI_SOCKET`, `CLASH_VR_TUI_SERVER`, `CLASH_VR_TUI_SECRET`,
+  `CLASH_VR_TUI_SECRET_FILE`
 - env: `CLASH_VR_TUI_CONFIG_PATH`, `CLASH_VR_TUI_TEST_URL`
-- file: `~/.config/clash-vr-tui/config.yaml`
+- file: `config.yaml` under the OS user config directory:
+  `~/.config/clash-vr-tui/` on Linux,
+  `~/Library/Application Support/clash-vr-tui/` on macOS,
+  `%AppData%\clash-vr-tui\` on Windows
 
 ```yaml
-# ~/.config/clash-vr-tui/config.yaml
 socket: /tmp/verge/verge-mihomo.sock   # or use an external controller:
 # server: 127.0.0.1:9090
-# secret: ""
+# secret-file: /etc/mihomo/controller.secret  # absolute path; or secret: "..."
 config-path: ""    # explicit mihomo config path for TCP/ICMP server lookup
-test-url: ""       # default delay-test URL
+test-url: ""       # delay-test URL for groups without their own testUrl
 ```
+
+A malformed file, an unknown key, `socket` together with `server`, or a secret
+without an endpoint stops startup with the file path and the reason.
 
 ## Architecture
 
