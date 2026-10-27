@@ -65,6 +65,16 @@ func NewWith(ep Endpoint) *Client {
 	return c
 }
 
+// WithTimeout returns a copy of the client whose REST calls give up after d,
+// sharing the same transport. Discovery uses it to probe candidates quickly.
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	cp := *c
+	httpClient := *c.http
+	httpClient.Timeout = d
+	cp.http = &httpClient
+	return &cp
+}
+
 // ValidateEndpoint checks that an endpoint is safe and dialable before a
 // client is constructed. TCP controller traffic is plaintext today, so bearer
 // secrets are limited to loopback endpoints (including SSH tunnels).

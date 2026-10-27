@@ -114,6 +114,11 @@ type Config struct {
 	Mode      string    `json:"mode"`
 	LogLevel  string    `json:"log-level"`
 	TUN       TUNConfig `json:"tun"`
+	// BindAddress is where inbound ports listen when AllowLan is on ("*" = all).
+	BindAddress string `json:"bind-address,omitempty"`
+	// Authentication holds "user:pass" credentials for inbound ports. Never
+	// print it; callers only need to know whether it is empty.
+	Authentication []string `json:"authentication,omitempty"`
 }
 
 // TUNConfig holds TUN settings.

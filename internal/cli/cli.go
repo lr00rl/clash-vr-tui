@@ -4,26 +4,88 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
 	"github.com/cdcd/clash-vr-tui/internal/config"
 	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
-// commands is the set of recognized subcommands.
-var commands = map[string]bool{
-	"status": true, "proxies": true, "groups": true, "nodes": true,
-	"switch": true, "test": true, "mode": true, "restart": true,
-	"conns": true, "connections": true, "help": true,
+// command is one subcommand. The first name is canonical; the rest are
+// aliases. Local commands run without resolving a controller.
+type command struct {
+	names   []string
+	args    string
+	summary string
+	group   string
+	local   bool
+	run     func(c *api.Client, opts options) error
 }
 
-// IsCommand reports whether s is a recognized subcommand.
-func IsCommand(s string) bool { return commands[s] }
+// commandGroups orders the help output.
+var commandGroups = []string{"Find", "Inspect", "Live", "Control", "Diagnose"}
+
+// commands is the registry. "help" is handled in run so this table does not
+// refer to printUsage, which reads it.
+var commands = []command{
+	{names: []string{"discover", "list-socket", "sockets"}, group: "Find", local: true, run: cmdDiscover,
+		summary: "find local mihomo controllers and show which one is used"},
+	{names: []string{"status"}, group: "Inspect", run: cmdStatus,
+		summary: "core version, endpoint, mode, ports, memory, active conns"},
+	{names: []string{"proxies", "groups"}, group: "Inspect", run: cmdGroups,
+		summary: "list groups with their current node"},
+	{names: []string{"nodes"}, args: "<group>", group: "Inspect", run: cmdNodes,
+		summary: "list nodes in a group with last delay"},
+	{names: []string{"conns", "connections"}, group: "Inspect", run: cmdConns,
+		summary: "list active connections"},
+	{names: []string{"rules"}, args: "[--grep S]", group: "Inspect", run: cmdRules,
+		summary: "list routing rules"},
+	{names: []string{"providers"}, args: "[update [name...]]", group: "Inspect", run: cmdProviders,
+		summary: "subscriptions and rule sets; update re-fetches them"},
+	{names: []string{"config"}, args: "[set tun|lan on|off | set log-level L]", group: "Inspect", run: cmdConfig,
+		summary: "show or change runtime config"},
+	{names: []string{"logs", "log"}, args: "[--level L] [--grep S] [--for DUR]", group: "Live", run: cmdLogs,
+		summary: "stream core logs live"},
+	{names: []string{"switch"}, args: "<group> <node>", group: "Control", run: cmdSwitch,
+		summary: "select a node in a group"},
+	{names: []string{"test"}, args: "<group>", group: "Control", run: cmdTest,
+		summary: "HTTP delay-test a group (--url, --timeout MS)"},
+	{names: []string{"unpin"}, args: "<group>", group: "Control", run: cmdUnpin,
+		summary: "return a URLTest/Fallback group to automatic selection"},
+	{names: []string{"mode"}, args: "[rule|global|direct]", group: "Control", run: cmdMode,
+		summary: "get or set the proxy mode"},
+	{names: []string{"close"}, args: "<id>... | --all | --host S", group: "Control", run: cmdClose,
+		summary: "close connections"},
+	{names: []string{"flush"}, args: "dns|fakeip", group: "Control", run: cmdFlush,
+		summary: "clear the core's DNS or fake-ip cache"},
+	{names: []string{"restart"}, group: "Control", run: cmdRestart,
+		summary: "restart the mihomo core"},
+	{names: []string{"doctor", "autodebug"}, args: "[--logs DUR] [--level L] [--probe] [--out DIR]", group: "Diagnose", run: cmdDoctor,
+		summary: "check the setup end to end and explain problems"},
+}
+
+func findCommand(name string) (command, bool) {
+	for _, c := range commands {
+		for _, n := range c.names {
+			if n == name {
+				return c, true
+			}
+		}
+	}
+	return command{}, false
+}
+
+// IsCommand reports whether s is a recognized subcommand or alias.
+func IsCommand(s string) bool {
+	_, ok := findCommand(s)
+	return ok || s == "help"
+}
 
 type options struct {
 	socket     string
@@ -34,10 +96,24 @@ type options struct {
 	json       bool
 	url        string
 	timeout    int
+	level      string
+	grep       string
+	forDur     time.Duration
+	all        bool
+	host       string
+	out        string
+	logsDur    time.Duration // doctor log capture; negative means the default
+	probe      bool
+	resolved   config.Resolved
 	args       []string // positional args after the subcommand
 }
 
-// Maybe runs a subcommand if argv begins with one (after stripping flags).
+// usageError marks a command-line mistake; run exits 2 for it.
+type usageError struct{ error }
+
+func usagef(format string, a ...any) error { return usageError{fmt.Errorf(format, a...)} }
+
+// Maybe runs a subcommand if argv contains one (after stripping flags).
 // Returns the process exit code and whether a subcommand was handled.
 func Maybe(argv []string, version string) (int, bool) {
 	hasCommand := false
@@ -51,96 +127,56 @@ func Maybe(argv []string, version string) (int, bool) {
 		return 0, false
 	}
 
-	opts := options{timeout: 5000}
+	opts := options{timeout: 5000, logsDur: -1}
+	valueFlags := map[string]func(string) error{
+		"socket":      func(v string) error { opts.socket = v; return nil },
+		"server":      func(v string) error { opts.server = v; return nil },
+		"secret":      func(v string) error { opts.secret = v; return nil },
+		"secret-file": func(v string) error { opts.secretFile = v; return nil },
+		"config-path": func(v string) error { opts.config = v; return nil },
+		"url":         func(v string) error { opts.url = v; return nil },
+		"grep":        func(v string) error { opts.grep = v; return nil },
+		"host":        func(v string) error { opts.host = v; return nil },
+		"out":         func(v string) error { opts.out = v; return nil },
+		"timeout":     func(v string) (err error) { opts.timeout, err = parseTimeout(v); return err },
+		"level":       func(v string) (err error) { opts.level, err = parseLevel(v); return err },
+		"for":         func(v string) (err error) { opts.forDur, err = parseDuration("--for", v); return err },
+		"logs":        func(v string) (err error) { opts.logsDur, err = parseDuration("--logs", v); return err },
+	}
+	boolFlags := map[string]*bool{"json": &opts.json, "all": &opts.all, "probe": &opts.probe}
+
 	var positional []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
-		switch {
-		case a == "--json" || a == "-json":
-			opts.json = true
-		case a == "--socket" || a == "-socket":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.socket = value
-		case strings.HasPrefix(a, "--socket="):
-			opts.socket = strings.TrimPrefix(a, "--socket=")
-		case a == "--server" || a == "-server":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.server = value
-		case strings.HasPrefix(a, "--server="):
-			opts.server = strings.TrimPrefix(a, "--server=")
-		case a == "--secret" || a == "-secret":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.secret = value
-		case strings.HasPrefix(a, "--secret="):
-			opts.secret = strings.TrimPrefix(a, "--secret=")
-		case a == "--secret-file" || a == "-secret-file":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.secretFile = value
-		case strings.HasPrefix(a, "--secret-file="):
-			opts.secretFile = strings.TrimPrefix(a, "--secret-file=")
-		case a == "--config-path" || a == "-config-path":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.config = value
-		case strings.HasPrefix(a, "--config-path="):
-			opts.config = strings.TrimPrefix(a, "--config-path=")
-		case a == "--url" || a == "-url":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.url = value
-		case strings.HasPrefix(a, "--url="):
-			opts.url = strings.TrimPrefix(a, "--url=")
-		case a == "--timeout" || a == "-timeout":
-			value, next, err := flagValue(argv, i, a)
-			if err != nil {
-				return cliUsageError(err)
-			}
-			i = next
-			opts.timeout, err = parseTimeout(value)
-			if err != nil {
-				return cliUsageError(err)
-			}
-		case strings.HasPrefix(a, "--timeout="):
-			var err error
-			opts.timeout, err = parseTimeout(strings.TrimPrefix(a, "--timeout="))
-			if err != nil {
-				return cliUsageError(err)
-			}
-		case strings.HasPrefix(a, "-"):
-			return cliUsageError(fmt.Errorf("unknown option %s", a))
-		default:
+		if !strings.HasPrefix(a, "-") || a == "-" {
 			positional = append(positional, a)
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if b, ok := boolFlags[name]; ok && !hasValue {
+			*b = true
+			continue
+		}
+		set, ok := valueFlags[name]
+		if !ok {
+			return cliUsageError(fmt.Errorf("unknown option %s", a))
+		}
+		if !hasValue {
+			var err error
+			if value, i, err = flagValue(argv, i, a); err != nil {
+				return cliUsageError(err)
+			}
+		}
+		if err := set(value); err != nil {
+			return cliUsageError(err)
 		}
 	}
 
 	if len(positional) == 0 || !IsCommand(positional[0]) {
 		return 0, false
 	}
-	cmd := positional[0]
 	opts.args = positional[1:]
-	return run(cmd, opts, version), true
+	return run(positional[0], opts, version), true
 }
 
 // flagValue takes the next argument as the value even when it starts with "-",
@@ -160,15 +196,47 @@ func parseTimeout(value string) (int, error) {
 	return timeout, nil
 }
 
+// parseDuration accepts Go durations ("30s", "2m") or plain seconds ("30").
+func parseDuration(flag, value string) (time.Duration, error) {
+	if n, err := strconv.Atoi(value); err == nil && n >= 0 {
+		return time.Duration(n) * time.Second, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("%s wants a duration such as 30s or 2m", flag)
+	}
+	return d, nil
+}
+
+// logLevels are the levels mihomo's /logs endpoint accepts, most verbose first.
+var logLevels = []string{"debug", "info", "warning", "error"}
+
+func parseLevel(value string) (string, error) {
+	value = strings.ToLower(value)
+	if value == "warn" {
+		value = "warning"
+	}
+	for _, l := range logLevels {
+		if l == value {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("--level must be one of %s", strings.Join(logLevels, ", "))
+}
+
 func cliUsageError(err error) (int, bool) {
 	fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
 	return 2, true
 }
 
-func run(cmd string, opts options, version string) int {
-	if cmd == "help" {
+func run(name string, opts options, version string) int {
+	if name == "help" {
 		printUsage(version)
 		return 0
+	}
+	cmd, _ := findCommand(name)
+	if cmd.local {
+		return exitCode(cmd.run(nil, opts), config.Resolved{})
 	}
 	resolved, err := config.Resolve(config.Flags{
 		Socket:     opts.socket,
@@ -189,31 +257,25 @@ func run(cmd string, opts options, version string) int {
 	if opts.url == "" {
 		opts.url = resolved.TestURL
 	}
-	c := api.NewWith(resolved.Endpoint)
-	err = nil
-	switch cmd {
-	case "status":
-		err = cmdStatus(c, opts)
-	case "proxies", "groups":
-		err = cmdGroups(c, opts)
-	case "nodes":
-		err = cmdNodes(c, opts)
-	case "switch":
-		err = cmdSwitch(c, opts)
-	case "test":
-		err = cmdTest(c, opts)
-	case "mode":
-		err = cmdMode(c, opts)
-	case "restart":
-		err = cmdRestart(c, opts)
-	case "conns", "connections":
-		err = cmdConns(c, opts)
+	opts.resolved = resolved
+	return exitCode(cmd.run(api.NewWith(resolved.Endpoint), opts), resolved)
+}
+
+// exitCode prints err and maps it to an exit status. When the endpoint was a
+// guess and nothing answered, it points at discover.
+func exitCode(err error, resolved config.Resolved) int {
+	if err == nil {
+		return 0
 	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
-		return 1
+	fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
+	if errors.As(err, new(usageError)) {
+		return 2
 	}
-	return 0
+	var se *api.StatusError
+	if resolved.Source == "default path" && !errors.As(err, &se) {
+		fmt.Fprintln(os.Stderr, "hint: no running controller was found; run `clash-vr-tui discover` to see what was checked")
+	}
+	return 1
 }
 
 func cmdStatus(c *api.Client, opts options) error {
@@ -237,7 +299,8 @@ func cmdStatus(c *api.Client, opts options) error {
 		return fmt.Errorf("get rules: %w", err)
 	}
 
-	out := map[string]any{"version": ver.Version, "meta": ver.Meta}
+	out := map[string]any{"version": ver.Version, "meta": ver.Meta,
+		"endpoint": map[string]string{"address": c.SocketPath(), "source": opts.resolved.Source}}
 	if cfg != nil {
 		out["mode"] = cfg.Mode
 		out["mixed_port"] = cfg.MixedPort
@@ -258,6 +321,7 @@ func cmdStatus(c *api.Client, opts options) error {
 		return printJSON(out)
 	}
 	fmt.Printf("Core:        mihomo %s (meta=%v)\n", styles.SafeText(ver.Version), ver.Meta)
+	fmt.Printf("Endpoint:    %s\n", styles.SafeText(endpointLabel(opts.resolved)))
 	if cfg != nil {
 		fmt.Printf("Mode:        %s\n", styles.SafeText(cfg.Mode))
 		fmt.Printf("Mixed Port:  %d\n", cfg.MixedPort)
@@ -465,43 +529,50 @@ func cmdConns(c *api.Client, opts options) error {
 }
 
 func printUsage(version string) {
-	fmt.Printf(`clash-vr-tui %s — terminal UI and CLI for the mihomo (Clash Verge Rev) core
-
-USAGE:
-  clash-vr-tui [--socket PATH]                 launch the interactive TUI
-  clash-vr-tui <command> [args] [--json]       run a one-off command
-
-COMMANDS:
-  status                     core version, mode, ports, memory, active conns
-  proxies | groups           list groups with their current node
-  nodes <group>              list nodes in a group with last delay
-  switch <group> <node>      select a node in a group
-  test <group>               HTTP delay-test a group (--url, --timeout MS)
-  mode [rule|global|direct]  get or set the proxy mode
-  restart                    restart the mihomo core
-  conns                      list active connections
-  help                       show this help
-
+	var b strings.Builder
+	fmt.Fprintf(&b, "clash-vr-tui %s: terminal UI and CLI for the mihomo (Clash Verge Rev) core\n\n", version)
+	b.WriteString("USAGE:\n")
+	b.WriteString("  clash-vr-tui [--socket PATH | --server H:P]   launch the interactive TUI\n")
+	b.WriteString("  clash-vr-tui <command> [args] [--json]         run a one-off command\n")
+	for _, group := range commandGroups {
+		fmt.Fprintf(&b, "\n%s:\n", strings.ToUpper(group))
+		for _, c := range commands {
+			if c.group != group {
+				continue
+			}
+			usage := strings.TrimSpace(c.names[0] + " " + c.args)
+			line := fmt.Sprintf("  %-34s %s", usage, c.summary)
+			if len(usage) > 34 {
+				line = fmt.Sprintf("  %s\n  %-34s %s", usage, "", c.summary)
+			}
+			if len(c.names) > 1 {
+				line += " (alias: " + strings.Join(c.names[1:], ", ") + ")"
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+	fmt.Fprintf(&b, `
 GLOBAL FLAGS:
-  --socket PATH    mihomo Unix socket (default: platform path)
-  --server H:P     external controller host:port (instead of socket)
+  --socket PATH    mihomo Unix socket
+  --server H:P     external controller host:port (loopback when a secret is set)
   --secret S       external controller secret
   --secret-file P  read external controller secret from file
   --config-path P  mihomo config path for TCP/ICMP probes
-  --json           machine-readable JSON output
-  --url URL        test URL (test command)
-  --timeout MS     delay-test timeout in milliseconds
+  --json           machine-readable output (NDJSON for logs)
 
-Connection resolves from flags > env (CLASH_VR_TUI_SOCKET/_SERVER/_SECRET,
-CLASH_VR_TUI_CONFIG_PATH, CLASH_VR_TUI_TEST_URL) > config file (%s) > defaults.
+The controller resolves from flags > env (CLASH_VR_TUI_SOCKET/_SERVER/_SECRET/
+_SECRET_FILE) > config file (%s) > auto-detect > %s.
+Auto-detect checks running cores, their config files, and Clash Verge Rev paths.
 
 EXAMPLES:
-  clash-vr-tui status --json
-  clash-vr-tui switch for-test-ip 'JP-Tokyo-01'
-  clash-vr-tui test for-test-ip --timeout 3000
-  clash-vr-tui mode global
-  clash-vr-tui status --server 127.0.0.1:9090 --secret mypw
-`, version, config.Path())
+  clash-vr-tui discover
+  clash-vr-tui logs --level warning --grep timeout
+  clash-vr-tui doctor --logs 30s --out ~/cvt-report
+  clash-vr-tui switch Proxy 'JP-Tokyo-01'
+  clash-vr-tui config set tun off
+  clash-vr-tui status --json | jq .mode
+`, config.Path(), api.DefaultSocketPath())
+	fmt.Print(b.String())
 }
 
 func printJSON(v any) error {

@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/cdcd/clash-vr-tui/internal/discover"
 )
 
 // Endpoint is a node's underlying server address.
@@ -174,27 +176,7 @@ func configFromProcess() string {
 
 func candidatePaths() []string {
 	home, _ := os.UserHomeDir()
-	const vergeDir = "io.github.clash-verge-rev.clash-verge-rev"
-	var paths []string
-	add := func(base string) {
-		paths = append(paths,
-			filepath.Join(base, "clash-verge.yaml"),
-			filepath.Join(base, "config.yaml"),
-		)
-	}
-	if home != "" {
-		add(filepath.Join(home, "Library", "Application Support", vergeDir))
-		add(filepath.Join(home, ".config", vergeDir))
-		add(filepath.Join(home, ".local", "share", vergeDir))
-		add(filepath.Join(home, ".config", "clash-verge"))
-		add(filepath.Join(home, ".config", "mihomo"))
-		add(filepath.Join(home, ".config", "clash"))
-		add(filepath.Join(home, ".config", "clash-meta"))
-	}
-	add(filepath.Join(string(os.PathSeparator), "etc", "mihomo"))
-	add(filepath.Join(string(os.PathSeparator), "etc", "clash"))
-	add(filepath.Join(string(os.PathSeparator), "etc", "clash-meta"))
-	return paths
+	return discover.ConfigPaths(home, runtime.GOOS)
 }
 
 func fileExists(p string) bool {

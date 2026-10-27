@@ -5,14 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cdcd/clash-vr-tui/internal/api"
 )
 
 func isolateConfig(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	previous := userConfigDir
+	previous, previousDetect := userConfigDir, autoDetect
 	userConfigDir = func() (string, error) { return dir, nil }
-	t.Cleanup(func() { userConfigDir = previous })
+	autoDetect = func() (api.Endpoint, string, bool) { return api.Endpoint{}, "", false }
+	t.Cleanup(func() { userConfigDir, autoDetect = previous, previousDetect })
 	for _, name := range []string{
 		"CLASH_VR_TUI_SERVER", "CLASH_VR_TUI_SOCKET", "CLASH_VR_TUI_SECRET",
 		"CLASH_VR_TUI_SECRET_FILE", "CLASH_VR_TUI_CONFIG_PATH", "CLASH_VR_TUI_TEST_URL",
@@ -161,5 +164,39 @@ func TestLoadAcceptsEmptyAndCommentOnlyFiles(t *testing.T) {
 		if _, err := Load(); err != nil {
 			t.Fatalf("Load(%q) = %v, want nil", data, err)
 		}
+	}
+}
+
+func TestResolveAutoDetectsOnlyWithoutAnExplicitEndpoint(t *testing.T) {
+	isolateConfig(t)
+	calls := 0
+	autoDetect = func() (api.Endpoint, string, bool) {
+		calls++
+		return api.Endpoint{Socket: "/var/run/found.sock"}, "auto-detected from process verge-mihomo", true
+	}
+
+	r, err := Resolve(Flags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Endpoint.Socket != "/var/run/found.sock" || !strings.HasPrefix(r.Source, "auto-detected") {
+		t.Fatalf("resolved %+v", r)
+	}
+
+	r, err = Resolve(Flags{Socket: "/tmp/explicit.sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Endpoint.Socket != "/tmp/explicit.sock" || r.Source != "flag" || calls != 1 {
+		t.Fatalf("explicit socket should skip discovery: %+v calls=%d", r, calls)
+	}
+
+	autoDetect = func() (api.Endpoint, string, bool) { return api.Endpoint{}, "", false }
+	r, err = Resolve(Flags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Endpoint.Socket != api.DefaultSocketPath() || r.Source != "default path" {
+		t.Fatalf("fallback = %+v", r)
 	}
 }

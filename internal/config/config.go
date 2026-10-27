@@ -5,6 +5,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
+	"github.com/cdcd/clash-vr-tui/internal/discover"
 )
 
 // File is the on-disk config at Path().
@@ -42,9 +44,24 @@ type Resolved struct {
 	Endpoint   api.Endpoint
 	ConfigPath string
 	TestURL    string
+	// Source says how the endpoint was chosen: "flag", "env", "config file",
+	// "auto-detected from ...", or "default path".
+	Source string
 }
 
 var userConfigDir = os.UserConfigDir
+
+// autoDetect finds a reachable local controller when no tier names one. Tests
+// replace it so they never probe the real machine.
+var autoDetect = func() (api.Endpoint, string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*discover.ProbeTimeout)
+	defer cancel()
+	c, ok := discover.Best(discover.Find(ctx))
+	if !ok {
+		return api.Endpoint{}, "", false
+	}
+	return c.Endpoint(), "auto-detected from " + c.Sources[0], true
+}
 
 // Path returns the config file path.
 func Path() string {
@@ -108,27 +125,31 @@ func Resolve(flags Flags) (Resolved, error) {
 		}
 	}
 	var ep api.Endpoint
+	var source string
 	switch {
 	case flags.Server != "":
-		ep.Server = flags.Server
+		ep.Server, source = flags.Server, "flag"
 		ep.Secret, err = resolveSecret(flags.Secret, flags.SecretFile)
 	case flags.Socket != "":
-		ep.Socket = flags.Socket
+		ep.Socket, source = flags.Socket, "flag"
 		ep.Secret, err = resolveSecret(flags.Secret, flags.SecretFile)
 	case envServer != "":
-		ep.Server = envServer
+		ep.Server, source = envServer, "env"
 		ep.Secret, err = resolveSecret(envSecret, envSecretFile)
 	case envSocket != "":
-		ep.Socket = envSocket
+		ep.Socket, source = envSocket, "env"
 		ep.Secret, err = resolveSecret(envSecret, envSecretFile)
 	case f.Server != "":
-		ep.Server = f.Server
+		ep.Server, source = f.Server, "config file"
 		ep.Secret, err = resolveSecret(f.Secret, f.SecretFile)
 	case f.Socket != "":
-		ep.Socket = f.Socket
+		ep.Socket, source = f.Socket, "config file"
 		ep.Secret, err = resolveSecret(f.Secret, f.SecretFile)
 	default:
-		ep.Socket = api.DefaultSocketPath()
+		var found bool
+		if ep, source, found = autoDetect(); !found {
+			ep, source = api.Endpoint{Socket: api.DefaultSocketPath()}, "default path"
+		}
 	}
 	if err != nil {
 		return Resolved{}, err
@@ -137,6 +158,7 @@ func Resolve(flags Flags) (Resolved, error) {
 		Endpoint:   ep,
 		ConfigPath: first(flags.ConfigPath, os.Getenv("CLASH_VR_TUI_CONFIG_PATH"), f.ConfigPath),
 		TestURL:    first(flags.TestURL, os.Getenv("CLASH_VR_TUI_TEST_URL"), f.TestURL),
+		Source:     source,
 	}, nil
 }
 
