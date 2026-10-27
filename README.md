@@ -190,10 +190,38 @@ binary does not dynamically link libc. The practical runtime differences are:
 Launch the interactive TUI:
 
 ```sh
-clash-vr-tui                          # auto-detects the verge socket
+clash-vr-tui                          # finds the running controller
 clash-vr-tui --socket /path/to.sock
 clash-vr-tui --server 127.0.0.1:9090 --secret mypw   # external controller
 ```
+
+### Finding the controller
+
+With no `--socket`, `--server`, environment variable, or config-file endpoint,
+`clash-vr-tui` looks for a running controller in this order and uses the first
+one that answers `GET /version`:
+
+1. running mihomo or clash processes: their `-ext-ctl-unix`, `-ext-ctl`, and
+   `-ext-ctl-pipe` flags, and the config file they loaded;
+2. config files: the Clash Verge Rev app directory and the usual mihomo,
+   clash, and clash-meta locations (`external-controller-unix`,
+   `external-controller`, `secret`);
+3. known paths: `/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`
+   (Clash Verge Rev service mode), `/tmp/verge/verge-mihomo.sock`, and
+   `$TMPDIR/verge-mihomo.sock`; on Windows the `verge-mihomo` and `mihomo` pipes.
+
+The process step matters for Clash Verge Rev in service mode, which passes the
+socket on the command line while its generated `clash-verge.yaml` still names
+an older path. `clash-vr-tui discover` prints every candidate, its state, and
+which one is used:
+
+```text
+  ADDRESS                                                   KIND    STATE    VERSION   SOURCE
+* /var/run/clash-verge-service/users/501/verge-mihomo.sock  socket  ok       v1.19.32  process verge-mihomo -ext-ctl-unix (+1)
+  127.0.0.1:9097                                            tcp     refused  -         config ~/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/config.yaml
+```
+
+`clash-vr-tui status` shows the endpoint in use and how it was chosen.
 
 ### Plain mihomo core
 
@@ -238,21 +266,68 @@ clash-vr-tui --socket /run/mihomo/mihomo.sock
 
 ### CLI (scriptable, no TUI)
 
+Everything the TUI does is also a command. Data commands accept `--json`;
+exit status is 0 on success, 1 on a runtime failure, and 2 on a usage error.
+
 ```sh
-clash-vr-tui status [--json]              # version, mode, ports, memory, conns
+# find
+clash-vr-tui discover                     # controllers on this machine (alias: list-socket)
+
+# inspect
+clash-vr-tui status [--json]              # version, endpoint, mode, ports, memory, conns
 clash-vr-tui proxies                      # groups with their current node
 clash-vr-tui nodes <group>                # nodes in a group with last delay
+clash-vr-tui conns [--json]               # active connections
+clash-vr-tui rules [--grep S]             # routing rules
+clash-vr-tui providers                    # subscriptions (usage, expiry) and rule sets
+clash-vr-tui config                       # runtime settings
+
+# live
+clash-vr-tui logs [--level L] [--grep S] [--for DUR] [--json]
+
+# control
 clash-vr-tui switch <group> <node>        # select a node
 clash-vr-tui test <group> [--timeout MS]  # HTTP delay-test, sorted
+clash-vr-tui unpin <group>                # URLTest/Fallback back to automatic
 clash-vr-tui mode [rule|global|direct]    # get or set the proxy mode
-clash-vr-tui restart                      # restart the core
-clash-vr-tui conns [--json]               # active connections
+clash-vr-tui config set tun|lan on|off    # or: config set log-level warning
+clash-vr-tui providers update [name...]   # re-fetch providers (all HTTP ones by default)
+clash-vr-tui close <id>... | --all | --host S
+clash-vr-tui flush dns|fakeip
+clash-vr-tui restart
+
+# diagnose
+clash-vr-tui doctor [--logs DUR] [--level L] [--probe] [--out DIR]   # alias: autodebug
 ```
 
-Example:
+`logs` streams the core's `WS /logs` until Ctrl+C or `--for` elapses and
+reconnects if the core restarts. `--level` takes debug, info, warning, or
+error (mihomo logs per-connection routing at debug). `--json` prints one JSON
+object per line for `jq`.
+
+`config set` reads the value back and fails if the core did not keep it, for
+example when TUN cannot start without the privileges it needs.
+
+`doctor` checks the path from controller to internet: the endpoint, runtime
+settings that commonly cause trouble (direct mode, LAN exposure, debug
+logging, TUN off without a system proxy), the system proxy (including a PAC URL
+served on loopback, which Clash Verge Rev uses), a request through
+the mixed port, DNS through the core, groups whose selected node is failing,
+subscriptions near expiry or quota, connections falling through to the final
+`MATCH` rule, warnings and errors in a short log capture, recent Clash Verge
+Rev log errors, and other Clash clients running at the same time. Each finding
+says what to do next, and the exit status is 1 when any check fails.
+`--out DIR` saves the report, the captured logs, the connection snapshot, and
+an allowlisted subset of the runtime config for later analysis. Credentials are
+left out, subscription URLs in log lines keep only scheme and host, and profiles
+are never copied. A run takes about the length of `--logs` (default 10s).
+
+Examples:
 
 ```sh
-clash-vr-tui test for-test-ip --timeout 3000
+clash-vr-tui logs --level warning --grep timeout
+clash-vr-tui logs --json --for 1m | jq -r 'select(.level=="error") | .payload'
+clash-vr-tui doctor --logs 30s --out ~/cvt-reports
 clash-vr-tui switch for-test-ip 'JP-Tokyo-01'
 clash-vr-tui status --json | jq .mode
 ```
@@ -274,7 +349,8 @@ closes it. `Ctrl+C` always quits. The `?` help overlay scrolls with `j`/`k`,
 
 ## Configuration
 
-Connection settings resolve from **flags > env > config file > defaults**. The
+Connection settings resolve from **flags > env > config file > auto-detect >
+default path**. The
 endpoint and its secret are chosen together: the first tier that names a socket
 or server also supplies the secret, so a secret from the config file is never
 sent to a server given on the command line.
