@@ -12,6 +12,7 @@ import (
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
 	"github.com/cdcd/clash-vr-tui/internal/config"
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
 // commands is the set of recognized subcommands.
@@ -25,19 +26,31 @@ var commands = map[string]bool{
 func IsCommand(s string) bool { return commands[s] }
 
 type options struct {
-	socket  string
-	server  string
-	secret  string
-	config  string
-	json    bool
-	url     string
-	timeout int
-	args    []string // positional args after the subcommand
+	socket     string
+	server     string
+	secret     string
+	secretFile string
+	config     string
+	json       bool
+	url        string
+	timeout    int
+	args       []string // positional args after the subcommand
 }
 
 // Maybe runs a subcommand if argv begins with one (after stripping flags).
 // Returns the process exit code and whether a subcommand was handled.
 func Maybe(argv []string, version string) (int, bool) {
+	hasCommand := false
+	for _, arg := range argv {
+		if IsCommand(arg) {
+			hasCommand = true
+			break
+		}
+	}
+	if !hasCommand {
+		return 0, false
+	}
+
 	opts := options{timeout: 5000}
 	var positional []string
 	for i := 0; i < len(argv); i++ {
@@ -46,47 +59,77 @@ func Maybe(argv []string, version string) (int, bool) {
 		case a == "--json" || a == "-json":
 			opts.json = true
 		case a == "--socket" || a == "-socket":
-			if i+1 < len(argv) {
-				i++
-				opts.socket = argv[i]
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
 			}
+			i = next
+			opts.socket = value
 		case strings.HasPrefix(a, "--socket="):
 			opts.socket = strings.TrimPrefix(a, "--socket=")
 		case a == "--server" || a == "-server":
-			if i+1 < len(argv) {
-				i++
-				opts.server = argv[i]
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
 			}
+			i = next
+			opts.server = value
 		case strings.HasPrefix(a, "--server="):
 			opts.server = strings.TrimPrefix(a, "--server=")
 		case a == "--secret" || a == "-secret":
-			if i+1 < len(argv) {
-				i++
-				opts.secret = argv[i]
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
 			}
+			i = next
+			opts.secret = value
 		case strings.HasPrefix(a, "--secret="):
 			opts.secret = strings.TrimPrefix(a, "--secret=")
-		case a == "--config-path" || a == "-config-path":
-			if i+1 < len(argv) {
-				i++
-				opts.config = argv[i]
+		case a == "--secret-file" || a == "-secret-file":
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
 			}
+			i = next
+			opts.secretFile = value
+		case strings.HasPrefix(a, "--secret-file="):
+			opts.secretFile = strings.TrimPrefix(a, "--secret-file=")
+		case a == "--config-path" || a == "-config-path":
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
+			}
+			i = next
+			opts.config = value
 		case strings.HasPrefix(a, "--config-path="):
 			opts.config = strings.TrimPrefix(a, "--config-path=")
 		case a == "--url" || a == "-url":
-			if i+1 < len(argv) {
-				i++
-				opts.url = argv[i]
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
 			}
+			i = next
+			opts.url = value
 		case strings.HasPrefix(a, "--url="):
 			opts.url = strings.TrimPrefix(a, "--url=")
 		case a == "--timeout" || a == "-timeout":
-			if i+1 < len(argv) {
-				i++
-				opts.timeout, _ = strconv.Atoi(argv[i])
+			value, next, err := flagValue(argv, i, a)
+			if err != nil {
+				return cliUsageError(err)
+			}
+			i = next
+			opts.timeout, err = parseTimeout(value)
+			if err != nil {
+				return cliUsageError(err)
 			}
 		case strings.HasPrefix(a, "--timeout="):
-			opts.timeout, _ = strconv.Atoi(strings.TrimPrefix(a, "--timeout="))
+			var err error
+			opts.timeout, err = parseTimeout(strings.TrimPrefix(a, "--timeout="))
+			if err != nil {
+				return cliUsageError(err)
+			}
+		case strings.HasPrefix(a, "-"):
+			return cliUsageError(fmt.Errorf("unknown option %s", a))
 		default:
 			positional = append(positional, a)
 		}
@@ -100,22 +143,55 @@ func Maybe(argv []string, version string) (int, bool) {
 	return run(cmd, opts, version), true
 }
 
+// flagValue takes the next argument as the value even when it starts with "-",
+// since generated secrets can.
+func flagValue(argv []string, i int, name string) (string, int, error) {
+	if i+1 >= len(argv) {
+		return "", i, fmt.Errorf("%s requires a value", name)
+	}
+	return argv[i+1], i + 1, nil
+}
+
+func parseTimeout(value string) (int, error) {
+	timeout, err := strconv.Atoi(value)
+	if err != nil || timeout < 1 || timeout > 600000 {
+		return 0, fmt.Errorf("timeout must be an integer from 1 to 600000 milliseconds")
+	}
+	return timeout, nil
+}
+
+func cliUsageError(err error) (int, bool) {
+	fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
+	return 2, true
+}
+
 func run(cmd string, opts options, version string) int {
-	resolved := config.Resolve(config.Flags{
+	if cmd == "help" {
+		printUsage(version)
+		return 0
+	}
+	resolved, err := config.Resolve(config.Flags{
 		Socket:     opts.socket,
 		Server:     opts.server,
 		Secret:     opts.secret,
+		SecretFile: opts.secretFile,
 		ConfigPath: opts.config,
 		TestURL:    opts.url,
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
+		return 2
+	}
+	if err := api.ValidateEndpoint(resolved.Endpoint); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
+		return 2
+	}
 	if opts.url == "" {
 		opts.url = resolved.TestURL
 	}
 	c := api.NewWith(resolved.Endpoint)
-	var err error
+	err = nil
 	switch cmd {
-	case "help":
-		printUsage(version)
 	case "status":
 		err = cmdStatus(c, opts)
 	case "proxies", "groups":
@@ -134,7 +210,7 @@ func run(cmd string, opts options, version string) int {
 		err = cmdConns(c, opts)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
 		return 1
 	}
 	return 0
@@ -145,9 +221,21 @@ func cmdStatus(c *api.Client, opts options) error {
 	if err != nil {
 		return fmt.Errorf("core unreachable at %s: %w", c.SocketPath(), err)
 	}
-	cfg, _ := c.GetConfig()
-	snap, _ := c.GetConnections()
-	rules, _ := c.GetRules()
+	cfg, err := c.GetConfig()
+	if err != nil {
+		return fmt.Errorf("get runtime config: %w", err)
+	}
+	if cfg == nil {
+		return fmt.Errorf("get runtime config: empty response")
+	}
+	snap, err := c.GetConnections()
+	if err != nil {
+		return fmt.Errorf("get connections: %w", err)
+	}
+	rules, err := c.GetRules()
+	if err != nil {
+		return fmt.Errorf("get rules: %w", err)
+	}
 
 	out := map[string]any{"version": ver.Version, "meta": ver.Meta}
 	if cfg != nil {
@@ -169,13 +257,13 @@ func cmdStatus(c *api.Client, opts options) error {
 	if opts.json {
 		return printJSON(out)
 	}
-	fmt.Printf("Core:        mihomo %s (meta=%v)\n", ver.Version, ver.Meta)
+	fmt.Printf("Core:        mihomo %s (meta=%v)\n", styles.SafeText(ver.Version), ver.Meta)
 	if cfg != nil {
-		fmt.Printf("Mode:        %s\n", cfg.Mode)
+		fmt.Printf("Mode:        %s\n", styles.SafeText(cfg.Mode))
 		fmt.Printf("Mixed Port:  %d\n", cfg.MixedPort)
 		fmt.Printf("Allow LAN:   %v\n", cfg.AllowLan)
 		fmt.Printf("TUN:         %v\n", cfg.TUN.Enable)
-		fmt.Printf("Log Level:   %s\n", cfg.LogLevel)
+		fmt.Printf("Log Level:   %s\n", styles.SafeText(cfg.LogLevel))
 	}
 	if snap != nil {
 		fmt.Printf("Memory:      %s\n", humanBytes(snap.Memory))
@@ -198,12 +286,13 @@ func cmdGroups(c *api.Client, opts options) error {
 	}
 	w := 0
 	for _, g := range groups {
-		if len(g.Name) > w {
-			w = len(g.Name)
+		if name := styles.SafeText(g.Name); len(name) > w {
+			w = len(name)
 		}
 	}
 	for _, g := range groups {
-		fmt.Printf("%-*s  %-10s -> %-28s (%d nodes)\n", w, g.Name, g.Type, g.Now, len(g.All))
+		fmt.Printf("%-*s  %-10s -> %-28s (%d nodes)\n", w,
+			styles.SafeText(g.Name), styles.SafeText(g.Type), styles.SafeText(g.Now), len(g.All))
 	}
 	return nil
 }
@@ -232,7 +321,10 @@ func cmdNodes(c *api.Client, opts options) error {
 		Name  string `json:"name"`
 		Delay int    `json:"delay"`
 	}
-	full, _ := c.GetProxies()
+	full, err := c.GetProxies()
+	if err != nil {
+		return fmt.Errorf("get proxy delay history: %w", err)
+	}
 	nodes := make([]nd, 0, len(g.All))
 	for _, name := range g.All {
 		delay := 0
@@ -251,7 +343,7 @@ func cmdNodes(c *api.Client, opts options) error {
 		if n.Name == g.Now {
 			marker = "* "
 		}
-		fmt.Printf("%s%-40s %s\n", marker, truncate(n.Name, 40), delayStr(n.Delay))
+		fmt.Printf("%s%-40s %s\n", marker, truncate(styles.SafeText(n.Name), 40), delayStr(n.Delay))
 	}
 	return nil
 }
@@ -267,7 +359,7 @@ func cmdSwitch(c *api.Client, opts options) error {
 	if opts.json {
 		return printJSON(map[string]string{"group": group, "selected": node})
 	}
-	fmt.Printf("Switched %s -> %s\n", group, node)
+	fmt.Printf("Switched %s -> %s\n", styles.SafeText(group), styles.SafeText(node))
 	return nil
 }
 
@@ -302,7 +394,7 @@ func cmdTest(c *api.Client, opts options) error {
 		return printJSON(map[string]any{"group": group, "results": items})
 	}
 	for _, it := range items {
-		fmt.Printf("%-40s %s\n", truncate(it.Name, 40), delayStr(it.Delay))
+		fmt.Printf("%-40s %s\n", truncate(styles.SafeText(it.Name), 40), delayStr(it.Delay))
 	}
 	return nil
 }
@@ -316,7 +408,7 @@ func cmdMode(c *api.Client, opts options) error {
 		if opts.json {
 			return printJSON(map[string]string{"mode": cfg.Mode})
 		}
-		fmt.Println(cfg.Mode)
+		fmt.Println(styles.SafeText(cfg.Mode))
 		return nil
 	}
 	mode := strings.ToLower(opts.args[0])
@@ -364,7 +456,10 @@ func cmdConns(c *api.Client, opts options) error {
 		if len(conn.Chains) > 0 {
 			chain = conn.Chains[0]
 		}
-		fmt.Printf("  %-45s %-20s %s\n", truncate(host, 45), truncate(chain, 20), conn.Rule)
+		fmt.Printf("  %-45s %-20s %s\n",
+			truncate(styles.SafeText(host), 45),
+			truncate(styles.SafeText(chain), 20),
+			styles.SafeText(conn.Rule))
 	}
 	return nil
 }
@@ -391,6 +486,7 @@ GLOBAL FLAGS:
   --socket PATH    mihomo Unix socket (default: platform path)
   --server H:P     external controller host:port (instead of socket)
   --secret S       external controller secret
+  --secret-file P  read external controller secret from file
   --config-path P  mihomo config path for TCP/ICMP probes
   --json           machine-readable JSON output
   --url URL        test URL (test command)

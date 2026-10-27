@@ -3,8 +3,10 @@ package styles
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -278,7 +280,7 @@ func FilterLine(label, value string, active bool) string {
 	if active {
 		cursor = "█"
 	}
-	return FilterPrompt.Render(label+": ") + value + cursor
+	return FilterPrompt.Render(label+": ") + SafeText(value) + cursor
 }
 
 // EmptyState is intentionally quiet: useful over SSH where wasted rows hurt.
@@ -302,6 +304,7 @@ func Fit(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	s = SafeText(s)
 	if runewidth.StringWidth(s) <= width {
 		return s
 	}
@@ -309,6 +312,17 @@ func Fit(s string, width int) string {
 		return runewidth.Truncate(s, width, "")
 	}
 	return runewidth.Truncate(s, width, "..")
+}
+
+// SafeText keeps controller-supplied values from issuing terminal commands or
+// changing the layout. Call it before styling raw fields that bypass Fit.
+func SafeText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, ansi.Strip(s))
 }
 
 func PadRight(s string, width int) string {

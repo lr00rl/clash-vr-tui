@@ -12,6 +12,7 @@ import (
 	"github.com/cdcd/clash-vr-tui/internal/cli"
 	"github.com/cdcd/clash-vr-tui/internal/config"
 	"github.com/cdcd/clash-vr-tui/internal/probe"
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
 var version = "dev"
@@ -25,21 +26,35 @@ func main() {
 	socketPath := flag.String("socket", "", "mihomo Unix socket path")
 	server := flag.String("server", "", "external controller host:port (instead of socket)")
 	secret := flag.String("secret", "", "external controller secret")
+	secretFile := flag.String("secret-file", "", "read external controller secret from file")
 	configPath := flag.String("config-path", "", "mihomo config path for TCP/ICMP node probes")
 	showVersion := flag.Bool("version", false, "show version")
 	flag.Parse()
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "Error: unknown command %s\n", styles.SafeText(flag.Arg(0)))
+		os.Exit(2)
+	}
 
 	if *showVersion {
 		fmt.Printf("clash-vr-tui %s\n", version)
 		os.Exit(0)
 	}
 
-	resolved := config.Resolve(config.Flags{
+	resolved, err := config.Resolve(config.Flags{
 		Socket:     *socketPath,
 		Server:     *server,
 		Secret:     *secret,
+		SecretFile: *secretFile,
 		ConfigPath: *configPath,
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", styles.SafeText(err.Error()))
+		os.Exit(2)
+	}
+	if err := api.ValidateEndpoint(resolved.Endpoint); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", styles.SafeText(err.Error()))
+		os.Exit(2)
+	}
 	if resolved.ConfigPath != "" {
 		probe.SetDefaultConfigPath(resolved.ConfigPath)
 	}

@@ -9,8 +9,12 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 )
+
+const maxResponseBody = 16 << 20
 
 // Endpoint describes how to reach the mihomo controller: either a Unix socket
 // (clash-verge default) or a TCP external-controller (host:port + optional
@@ -61,6 +65,42 @@ func NewWith(ep Endpoint) *Client {
 	return c
 }
 
+// ValidateEndpoint checks that an endpoint is safe and dialable before a
+// client is constructed. TCP controller traffic is plaintext today, so bearer
+// secrets are limited to loopback endpoints (including SSH tunnels).
+func ValidateEndpoint(ep Endpoint) error {
+	if ep.Socket != "" {
+		return nil
+	}
+	if ep.Server == "" {
+		return fmt.Errorf("controller server is empty")
+	}
+	host, port, err := net.SplitHostPort(ep.Server)
+	if err != nil {
+		return fmt.Errorf("invalid controller server %q (want host:port): %w", ep.Server, err)
+	}
+	if host == "" {
+		return fmt.Errorf("controller server host is empty")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("invalid controller server port %q", port)
+	}
+	if ep.Secret != "" && !isLoopbackHost(host) {
+		return fmt.Errorf("refusing to send controller secret over plaintext to non-loopback host %q; use a loopback SSH tunnel", host)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // DefaultSocketPath returns the platform-appropriate socket path.
 func DefaultSocketPath() string {
 	if runtime.GOOS == "windows" {
@@ -92,12 +132,12 @@ func (c *Client) get(path string) ([]byte, error) {
 		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", path, err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("GET %s: status %d: %s", path, resp.StatusCode, string(body))
+		return nil, &StatusError{Method: "GET", Path: path, Code: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
 }
@@ -118,12 +158,12 @@ func (c *Client) put(path string, payload interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("PUT %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", path, err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("PUT %s: status %d: %s", path, resp.StatusCode, string(body))
+		return nil, &StatusError{Method: "PUT", Path: path, Code: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
 }
@@ -144,12 +184,12 @@ func (c *Client) patch(path string, payload interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("PATCH %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", path, err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("PATCH %s: status %d: %s", path, resp.StatusCode, string(body))
+		return nil, &StatusError{Method: "PATCH", Path: path, Code: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
 }
@@ -166,8 +206,11 @@ func (c *Client) delete(path string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("DELETE %s: status %d: %s", path, resp.StatusCode, string(body))
+		body, readErr := readResponseBody(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("DELETE %s: status %d: %w", path, resp.StatusCode, readErr)
+		}
+		return &StatusError{Method: "DELETE", Path: path, Code: resp.StatusCode, Body: string(body)}
 	}
 	return nil
 }
@@ -196,12 +239,36 @@ func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", path, err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("POST %s: status %d: %s", path, resp.StatusCode, string(body))
+		return nil, &StatusError{Method: "POST", Path: path, Code: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
+}
+
+func readResponseBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxResponseBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxResponseBody {
+		return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+	}
+	return body, nil
+}
+
+// StatusError is a controller reply with an HTTP error status. Callers inspect
+// Code to tell a mihomo delay timeout (504) from other failures.
+type StatusError struct {
+	Method string
+	Path   string
+	Code   int
+	Body   string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s %s: status %d: %s", e.Method, e.Path, e.Code, e.Body)
 }
