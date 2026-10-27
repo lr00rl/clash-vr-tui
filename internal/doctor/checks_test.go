@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
 // Real lines captured from the development machine.
@@ -52,6 +53,7 @@ func hasID(fs []Finding, id string) bool {
 func TestConfigFindingsSeverity(t *testing.T) {
 	toCore := sysProxy{Checked: true, Proxies: []proxySetting{{Kind: "HTTP", Host: "127.0.0.1", Port: 7897}}}
 	off := sysProxy{Checked: true}
+	offMac := sysProxy{Checked: true, Source: "scutil --proxy"}
 	cases := []struct {
 		name string
 		cfg  api.Config
@@ -64,7 +66,8 @@ func TestConfigFindingsSeverity(t *testing.T) {
 		{"lan with auth", api.Config{Mode: "rule", AllowLan: true, Authentication: []string{""}, TUN: api.TUNConfig{Enable: true}}, off, "config.allow-lan", Info},
 		{"lan on loopback", api.Config{Mode: "rule", AllowLan: true, BindAddress: "127.0.0.1", TUN: api.TUNConfig{Enable: true}}, off, "config.allow-lan", Info},
 		{"debug log level", api.Config{Mode: "rule", LogLevel: "debug", TUN: api.TUNConfig{Enable: true}}, off, "config.log-level-debug", Warn},
-		{"tun off and no system proxy", api.Config{Mode: "rule", MixedPort: 7897}, off, "config.bypass", Fail},
+		{"tun off and no system proxy (scutil)", api.Config{Mode: "rule", MixedPort: 7897}, offMac, "config.bypass", Fail},
+		{"tun off and no proxy variables (env only)", api.Config{Mode: "rule", MixedPort: 7897}, off, "config.bypass", Warn},
 		{"clean", api.Config{Mode: "rule", MixedPort: 7897}, toCore, "config.summary", OK},
 	}
 	for _, tc := range cases {
@@ -331,7 +334,7 @@ func TestLogFindingsGroupsPatternsAndDials(t *testing.T) {
 
 func TestRedactURLs(t *testing.T) {
 	in := `[Provider] sub pull error: Get "https://user:pw@sub.example.com/api/v1/client/subscribe?token=SECRET": EOF; see https://example.org/`
-	got := redactURLs(in)
+	got := styles.RedactURLs(in)
 	if strings.Contains(got, "SECRET") || strings.Contains(got, "pw@") || strings.Contains(got, "subscribe") {
 		t.Fatalf("redactURLs left a secret: %q", got)
 	}
@@ -340,8 +343,8 @@ func TestRedactURLs(t *testing.T) {
 	}
 	// A real Verge line: the URL sits in parentheses followed by a colon.
 	verge := "error sending request for url (http://substore.example.org:8080/***/api/file/***): client error (Connect)"
-	if got := redactURLs(verge); got != "error sending request for url (http://substore.example.org:8080/***): client error (Connect)" {
-		t.Fatalf("redactURLs(verge line) = %q", got)
+	if got := styles.RedactURLs(verge); got != "error sending request for url (http://substore.example.org:8080/***): client error (Connect)" {
+		t.Fatalf("RedactURLs(verge line) = %q", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
 // maxLogLines caps what a long capture keeps in memory; later lines are
@@ -41,7 +42,7 @@ func captureLogs(ctx context.Context, c *api.Client, level string, d time.Durati
 			dropped++
 			return
 		}
-		lines = append(lines, LogLine{Time: now(), Level: e.Type, Payload: redactURLs(e.Payload)})
+		lines = append(lines, LogLine{Time: now(), Level: e.Type, Payload: styles.RedactURLs(e.Payload)})
 	}
 	end := captureEnd{}
 	var streamErr error
@@ -262,31 +263,6 @@ func maskIPv6(s string) string {
 
 func isWordByte(c byte) bool {
 	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-var urlRe = regexp.MustCompile(`(?i)\b((?:https?|wss?)://)([^/\s"'<>()]+)([^\s"'<>()]*)`)
-
-// redactURLs keeps the scheme and host of each URL and drops credentials,
-// path and query. A provider fetch error carries the subscription URL, whose
-// path or query is usually the account token.
-func redactURLs(s string) string {
-	return urlRe.ReplaceAllStringFunc(s, func(m string) string {
-		// Punctuation that ends a sentence is not part of the URL.
-		trimmed := strings.TrimRight(m, ".,;:")
-		parts := urlRe.FindStringSubmatch(trimmed)
-		if parts == nil {
-			return m
-		}
-		host := parts[2]
-		if i := strings.LastIndexByte(host, '@'); i >= 0 {
-			host = host[i+1:]
-		}
-		rest := parts[3]
-		if rest != "" && rest != "/" {
-			rest = "/***"
-		}
-		return parts[1] + host + rest + m[len(trimmed):]
-	})
 }
 
 // dialErrRe matches mihomo's failed-dial lines:

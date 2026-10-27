@@ -2,6 +2,7 @@ package styles
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -323,6 +324,31 @@ func SafeText(s string) string {
 		}
 		return r
 	}, ansi.Strip(s))
+}
+
+var urlRe = regexp.MustCompile(`(?i)\b((?:https?|wss?)://)([^/?#\s"'<>()]+)([^\s"'<>()]*)`)
+
+// RedactURLs keeps the scheme and host of each URL and drops credentials,
+// path, query and fragment. Subscription URLs carry the account token in the
+// path or query, and mihomo puts them in provider errors and log lines.
+func RedactURLs(s string) string {
+	return urlRe.ReplaceAllStringFunc(s, func(m string) string {
+		// Punctuation that ends a sentence is not part of the URL.
+		trimmed := strings.TrimRight(m, ".,;:")
+		parts := urlRe.FindStringSubmatch(trimmed)
+		if parts == nil {
+			return m
+		}
+		host := parts[2]
+		if i := strings.LastIndexByte(host, '@'); i >= 0 {
+			host = host[i+1:]
+		}
+		rest := parts[3]
+		if rest != "" && rest != "/" {
+			rest = "/***"
+		}
+		return parts[1] + host + rest + m[len(trimmed):]
+	})
 }
 
 func PadRight(s string, width int) string {

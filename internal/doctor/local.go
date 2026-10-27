@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 	"gopkg.in/yaml.v3"
 )
 
@@ -189,7 +190,7 @@ func vergeLogFinding(label, data string, now time.Time) Finding {
 		} else {
 			warns++
 		}
-		msg := normalizePattern(redactURLs(m[3]))
+		msg := normalizePattern(styles.RedactURLs(m[3]))
 		key := m[2] + "\x00" + msg
 		i, ok := idx[key]
 		if !ok {

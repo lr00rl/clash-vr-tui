@@ -15,6 +15,7 @@ import (
 
 	"github.com/cdcd/clash-vr-tui/internal/api"
 	"github.com/cdcd/clash-vr-tui/internal/discover"
+	"github.com/cdcd/clash-vr-tui/internal/styles"
 )
 
 func controllerFindings(endpoint, source string, ver *api.VersionInfo, err error) []Finding {
@@ -112,8 +113,13 @@ func configFindings(cfg *api.Config, sp sysProxy) []Finding {
 	}
 	if !cfg.TUN.Enable {
 		if toCore, known := sp.routesToCore(cfg); sp.Checked && known && !toCore {
-			add(Fail, "bypass", "TUN is off and the system proxy does not point at the core",
-				"Apps that do not set a proxy themselves send traffic around the core",
+			// Only scutil reads the real system setting; shell variables miss a
+			// desktop proxy set through gsettings or KDE, so they only warrant a warning.
+			severity, detail := Fail, "Apps that do not set a proxy themselves send traffic around the core"
+			if sp.Source != "scutil --proxy" {
+				severity, detail = Warn, "This shell's proxy variables do not point at the core; a desktop-wide proxy setting was not checked"
+			}
+			add(severity, "bypass", "TUN is off and the system proxy does not point at the core", detail,
 				"Turn on TUN or System Proxy in Clash Verge Rev (clash-vr-tui config set tun on)")
 		}
 	}
@@ -289,7 +295,11 @@ func fetchPACTargets(ctx context.Context, pacURL string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: nil},
+		// A redirect could leave loopback; read only the local response.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -347,9 +357,13 @@ func sysProxyFindings(sp sysProxy, cfg *api.Config) []Finding {
 			"Another proxy app may own the system proxy; toggle System Proxy in Clash Verge Rev or quit the other app"))
 	}
 	if sp.PAC != "" {
+		pac := sp.PAC
+		if u, err := url.Parse(pac); err != nil || !isLoopbackHost(u.Hostname()) {
+			pac = styles.RedactURLs(pac)
+		}
 		switch {
 		case sp.PACErr != nil:
-			out = append(out, f(Info, "pac", "Proxy auto-config (PAC) is on", sp.PAC+"\ncould not read it: "+sp.PACErr.Error(), ""))
+			out = append(out, f(Info, "pac", "Proxy auto-config (PAC) is on", pac+"\ncould not read it: "+sp.PACErr.Error(), ""))
 		default:
 			sends := "sends traffic to " + strings.Join(sp.PACTargets, ", ")
 			coreHit := false
@@ -357,9 +371,9 @@ func sysProxyFindings(sp sysProxy, cfg *api.Config) []Finding {
 				coreHit = coreHit || hostPortToCore(t, ports)
 			}
 			if coreHit {
-				out = append(out, f(OK, "pac", "Proxy auto-config (PAC) points at the core", sp.PAC+"\n"+sends, ""))
+				out = append(out, f(OK, "pac", "Proxy auto-config (PAC) points at the core", pac+"\n"+sends, ""))
 			} else {
-				out = append(out, f(Warn, "pac", "Proxy auto-config (PAC) does not point at the core", sp.PAC+"\n"+sends+portsNote(cfg),
+				out = append(out, f(Warn, "pac", "Proxy auto-config (PAC) does not point at the core", pac+"\n"+sends+portsNote(cfg),
 					"Toggle System Proxy in Clash Verge Rev so it regenerates the PAC file"))
 			}
 		}
@@ -409,18 +423,29 @@ func egressFindings(ctx context.Context, cfg *api.Config, testURL string) []Find
 	transport := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: proxyAddr}), DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: egressTimeout}
-	ctx, cancel := context.WithTimeout(ctx, egressTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
-	if err != nil {
+	if _, err := url.ParseRequestURI(testURL); err != nil {
 		return f(Warn, "bad-url", "Egress not tested: invalid test URL", err.Error(), "Fix --url or test-url in the config file")
 	}
-	start := time.Now()
-	resp, err := client.Do(req)
-	elapsed := time.Since(start).Round(time.Millisecond)
+	// One retry keeps a single dropped request from reading as a broken setup.
+	var resp *http.Response
+	var err error
+	var elapsed time.Duration
+	for attempt := 0; attempt < 2 && ctx.Err() == nil; attempt++ {
+		var req *http.Request
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+		if err != nil {
+			return f(Warn, "bad-url", "Egress not tested: invalid test URL", err.Error(), "Fix --url or test-url in the config file")
+		}
+		start := time.Now()
+		resp, err = client.Do(req)
+		elapsed = time.Since(start).Round(time.Millisecond)
+		if err == nil {
+			break
+		}
+	}
 	where := fmt.Sprintf("GET %s through %s", testURL, proxyAddr)
 	if err != nil {
-		return f(Fail, "failed", "No response through the mixed port", where+"\n"+err.Error(),
+		return f(Fail, "failed", "No response through the mixed port (2 attempts)", where+"\n"+err.Error(),
 			"Check the selected nodes under Groups below, or run doctor --probe to test every group")
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
@@ -445,6 +470,9 @@ func dnsCheck(c *api.Client, testURL string) []Finding {
 		return []Finding{{Check: checkDNS, ID: "dns.skipped", Severity: Info, Title: "DNS not tested: the test URL has no host name"}}
 	}
 	res, err := c.QueryDNS(host, "A")
+	if err != nil || res == nil || res.Status != 0 || len(res.Answer) == 0 {
+		res, err = c.QueryDNS(host, "A") // one retry, as for egress
+	}
 	return dnsFindings(host, res, err)
 }
 

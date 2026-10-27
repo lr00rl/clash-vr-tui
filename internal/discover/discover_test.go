@@ -175,3 +175,18 @@ func TestClassifyPermission(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestProcessFlagForms(t *testing.T) {
+	ps := "/usr/bin/mihomo --ext-ctl-unix=/run/a.sock\n" +
+		"/usr/bin/mihomo -ext-ctl-unix=/run/b.sock\n" +
+		"/usr/bin/mihomo -d /etc/mihomo -ext-ctl-unix c.sock\n" +
+		"/usr/bin/mihomo -d . -f cfg.yaml -ext-ctl-unix d.sock"
+	var got []string
+	for _, c := range fromProcesses(ps, fakeSources("", nil)) {
+		got = append(got, c.Address)
+	}
+	want := "/run/a.sock,/run/b.sock,/etc/mihomo/c.sock"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("got %v, want %s (relative paths with a relative -d are dropped)", got, want)
+	}
+}

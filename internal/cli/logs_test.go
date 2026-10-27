@@ -79,3 +79,20 @@ func TestStreamLogsOnceFailsWithoutConnecting(t *testing.T) {
 		t.Fatalf("connected=%v err=%v, want a dial failure", connected, err)
 	}
 }
+
+// A quiet stream (say --level error) that drops before any entry still
+// connected, so cmdLogs must reconnect rather than exit.
+func TestStreamLogsOnceQuietStreamCountsAsConnected(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if conn, err := upgrader.Upgrade(w, r, nil); err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+	c := api.NewWith(api.Endpoint{Server: strings.TrimPrefix(srv.URL, "http://")})
+	connected, err := streamLogsOnce(context.Background(), c, "error", func(api.LogEntry) {})
+	if !connected || err == nil {
+		t.Fatalf("connected=%v err=%v, want a connected stream that ended", connected, err)
+	}
+}

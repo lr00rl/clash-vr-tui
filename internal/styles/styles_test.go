@@ -25,3 +25,17 @@ func TestSafeTextPreservesUnicode(t *testing.T) {
 		t.Fatalf("SafeText(%q) = %q", input, got)
 	}
 }
+
+func TestRedactURLsDropsTokens(t *testing.T) {
+	cases := map[string]string{
+		"Get \"https://sub.example.com/api/v1/client/subscribe?token=abc\": EOF": "Get \"https://sub.example.com/***\": EOF",
+		"fetch https://sub.example.com?token=abc failed":                         "fetch https://sub.example.com/*** failed",
+		"https://user:pw@host.example/#frag.":                                    "https://host.example/***.",
+		"see http://127.0.0.1:9090/ now":                                         "see http://127.0.0.1:9090/ now",
+	}
+	for in, want := range cases {
+		if got := RedactURLs(in); got != want {
+			t.Errorf("RedactURLs(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

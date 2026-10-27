@@ -53,8 +53,9 @@ func cmdLogs(c *api.Client, opts options) error {
 	}
 }
 
-// streamLogsOnce runs one WebSocket session and reports whether any entry
-// arrived before it ended.
+// streamLogsOnce runs one WebSocket session and reports whether it connected.
+// StreamLogs closes ch only after a successful dial, so a closed channel or a
+// received entry both mean the stream was up, even on a quiet error level.
 func streamLogsOnce(ctx context.Context, c *api.Client, level string, emit func(api.LogEntry)) (bool, error) {
 	ch := make(chan api.LogEntry, 64)
 	errCh := make(chan error, 1)
@@ -64,7 +65,7 @@ func streamLogsOnce(ctx context.Context, c *api.Client, level string, emit func(
 		select {
 		case entry, ok := <-ch:
 			if !ok {
-				return got, <-errCh
+				return true, <-errCh
 			}
 			got = true
 			emit(entry)
@@ -75,7 +76,7 @@ func streamLogsOnce(ctx context.Context, c *api.Client, level string, emit func(
 				select {
 				case entry, ok := <-ch:
 					if !ok {
-						return got, err
+						return true, err
 					}
 					got = true
 					emit(entry)
@@ -98,8 +99,10 @@ func (p logPrinter) print(e api.LogEntry) {
 		return
 	}
 	now := time.Now()
+	// Provider errors in the log carry subscription URLs with their tokens.
+	payload := styles.RedactURLs(e.Payload)
 	if p.json {
-		line, _ := json.Marshal(map[string]string{"time": now.Format(time.RFC3339Nano), "level": e.Type, "payload": e.Payload})
+		line, _ := json.Marshal(map[string]string{"time": now.Format(time.RFC3339Nano), "level": e.Type, "payload": payload})
 		fmt.Println(string(line))
 		return
 	}
@@ -111,7 +114,7 @@ func (p logPrinter) print(e api.LogEntry) {
 	if p.color {
 		label = levelColor(e.Type) + label + ansiReset
 	}
-	fmt.Printf("%s %s %s\n", now.Format("15:04:05"), label, styles.SafeText(e.Payload))
+	fmt.Printf("%s %s %s\n", now.Format("15:04:05"), label, styles.SafeText(payload))
 }
 
 const ansiReset = "\x1b[0m"

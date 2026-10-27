@@ -36,6 +36,12 @@ func cmdDoctor(c *api.Client, opts options) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// The first Ctrl+C ends the capture and prints what was gathered; restoring
+	// default handling lets a second one exit even if the controller hangs.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	if logsDur > 0 && !opts.json {
 		fmt.Fprintf(os.Stderr, "Running checks and capturing %s of %s logs (Ctrl+C to stop early)...\n", logsDur, level)
 	}

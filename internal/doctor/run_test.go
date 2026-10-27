@@ -113,7 +113,7 @@ func TestRunAgainstFakeController(t *testing.T) {
 		}
 	}
 	for id, want := range map[string]Severity{
-		"controller.ok": OK, "config.bypass": Fail, "sysproxy.off": Info, "egress.ok": OK, "dns.ok": OK,
+		"controller.ok": OK, "config.bypass": Warn, "sysproxy.off": Info, "egress.ok": OK, "dns.ok": OK,
 		"groups.ok": OK, "providers.none": Info, "routing.match": Info, "logs.patterns": Warn, "verge.absent": Info,
 		"conflicts.none": OK,
 	} {
@@ -121,7 +121,8 @@ func TestRunAgainstFakeController(t *testing.T) {
 			t.Errorf("%s = %s, want %s", id, got, want)
 		}
 	}
-	if r.Summary.Fail != 1 {
+	// On Linux only shell variables are checked, so a bypass is a warning.
+	if r.Summary.Fail != 0 {
 		t.Errorf("summary = %+v", r.Summary)
 	}
 	if len(r.Logs) != 2 || r.Connections == nil || len(r.Connections.Connections) != 1 {

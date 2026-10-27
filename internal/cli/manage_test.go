@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cdcd/clash-vr-tui/internal/api"
 )
 
 // captureStdout runs f and returns what it printed.
@@ -137,7 +139,7 @@ func TestCloseByHost(t *testing.T) {
 			{"id":"2","metadata":{"host":"example.org"}},
 			{"id":"3","metadata":{"host":"","destinationIP":"140.82.112.3"}}]}`))
 	})
-	if _, err := captureStdout(t, func() error { return cmdClose(client, options{host: "GitHub"}) }); err != nil {
+	if _, err := captureStdout(t, func() error { return cmdClose(client, options{host: "GitHub.com"}) }); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(closed, ",") != "1" {
@@ -145,5 +147,24 @@ func TestCloseByHost(t *testing.T) {
 	}
 	if err := cmdClose(client, options{}); err == nil {
 		t.Fatal("close without targets should be a usage error")
+	}
+}
+
+func TestHostMatchesIsNarrow(t *testing.T) {
+	cases := []struct {
+		host, ip, want string
+		match          bool
+	}{
+		{"api.github.com", "", "github.com", true},
+		{"github.com", "", "github.com", true},
+		{"notgithub.com", "", "github.com", false},
+		{"data.a.com.example", "", "a.com", false},
+		{"", "11.1.1.10", "1.1.1.1", false},
+		{"", "1.1.1.1", "1.1.1.1", true},
+	}
+	for _, c := range cases {
+		if got := hostMatches(api.ConnMetadata{Host: c.host, DstIP: c.ip}, c.want); got != c.match {
+			t.Errorf("hostMatches(%q/%q, %q) = %v", c.host, c.ip, c.want, got)
+		}
 	}
 }

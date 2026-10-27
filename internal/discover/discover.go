@@ -175,7 +175,8 @@ func (l *candidateList) add(c Candidate) {
 	l.items = append(l.items, c)
 }
 
-var flagRe = regexp.MustCompile(`\s-([a-zA-Z][\w-]*)`)
+// flagRe matches Go flag syntax: -name or --name, optionally with =value.
+var flagRe = regexp.MustCompile(`\s--?([a-zA-Z][\w-]*)=?`)
 
 // fromProcesses reads controller flags from ps output. Paths may contain
 // spaces (macOS "Application Support"), so a flag's value runs until the
@@ -202,8 +203,12 @@ func fromProcesses(psOut string, src sources) []Candidate {
 			flags[line[loc[2]:loc[3]]] = strings.TrimSpace(line[loc[1]:end])
 		}
 		source := "process " + filepath.Base(exe)
+		home := flags["d"]
+		if !filepath.IsAbs(home) {
+			home = "" // relative to the process's cwd, which we cannot see
+		}
 		var found []Candidate
-		if v := flags["ext-ctl-unix"]; v != "" {
+		if v := resolveRelative(flags["ext-ctl-unix"], home); v != "" {
 			found = append(found, Candidate{Kind: KindSocket, Address: v, Sources: []string{source + " -ext-ctl-unix"}})
 		}
 		if v := flags["ext-ctl-pipe"]; v != "" {
@@ -213,9 +218,9 @@ func fromProcesses(psOut string, src sources) []Candidate {
 			found = append(found, Candidate{Kind: KindTCP, Address: v, Secret: flags["secret"], Sources: []string{source + " -ext-ctl"}})
 		}
 		// The config the process loaded may name controllers the flags did not.
-		cfg := flags["f"]
-		if cfg == "" && flags["d"] != "" {
-			cfg = filepath.Join(flags["d"], "config.yaml")
+		cfg := resolveRelative(flags["f"], home)
+		if cfg == "" && home != "" {
+			cfg = filepath.Join(home, "config.yaml")
 		}
 		if cfg != "" {
 			if data, err := src.readFile(cfg); err == nil {
@@ -230,6 +235,18 @@ func fromProcesses(psOut string, src sources) []Candidate {
 		out = append(out, found...)
 	}
 	return out
+}
+
+// resolveRelative makes p absolute against mihomo's home directory, or drops
+// it when it is relative and the home directory is unknown.
+func resolveRelative(p, home string) string {
+	switch {
+	case p == "" || filepath.IsAbs(p):
+		return p
+	case home != "":
+		return filepath.Join(home, p)
+	}
+	return ""
 }
 
 type controllerConfig struct {

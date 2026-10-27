@@ -118,10 +118,15 @@ func usagef(format string, a ...any) error { return usageError{fmt.Errorf(format
 func Maybe(argv []string, version string) (int, bool) {
 	hasCommand := false
 	for _, arg := range argv {
-		if IsCommand(arg) {
-			hasCommand = true
+		if arg == "--" {
 			break
 		}
+		if arg == "-h" || arg == "--help" {
+			// The full help covers the TUI flags too, so it wins over flag.Usage.
+			printUsage(version)
+			return 0, true
+		}
+		hasCommand = hasCommand || IsCommand(arg)
 	}
 	if !hasCommand {
 		return 0, false
@@ -148,13 +153,25 @@ func Maybe(argv []string, version string) (int, bool) {
 	var positional []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
+		if a == "--" { // everything after is positional, e.g. a node named "-HK"
+			positional = append(positional, argv[i+1:]...)
+			break
+		}
 		if !strings.HasPrefix(a, "-") || a == "-" {
 			positional = append(positional, a)
 			continue
 		}
 		name, value, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		if b, ok := boolFlags[name]; ok && !hasValue {
-			*b = true
+		if b, ok := boolFlags[name]; ok {
+			if !hasValue {
+				*b = true
+				continue
+			}
+			v, err := strconv.ParseBool(value)
+			if err != nil {
+				return cliUsageError(fmt.Errorf("%s wants true or false", a))
+			}
+			*b = v
 			continue
 		}
 		set, ok := valueFlags[name]
@@ -267,7 +284,7 @@ func exitCode(err error, resolved config.Resolved) int {
 	if err == nil {
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(err.Error()))
+	fmt.Fprintf(os.Stderr, "error: %s\n", styles.SafeText(styles.RedactURLs(err.Error())))
 	if errors.As(err, new(usageError)) {
 		return 2
 	}

@@ -179,7 +179,7 @@ func updateProviders(c *api.Client, names []string) error {
 	for _, t := range targets {
 		if err := t.update(t.name); err != nil {
 			failed++
-			fmt.Printf("failed   %s: %s\n", styles.SafeText(t.name), styles.SafeText(err.Error()))
+			fmt.Printf("failed   %s: %s\n", styles.SafeText(t.name), styles.SafeText(styles.RedactURLs(err.Error())))
 			continue
 		}
 		fmt.Printf("updated  %s\n", styles.SafeText(t.name))
@@ -310,9 +310,8 @@ func cmdClose(c *api.Client, opts options) error {
 		if err != nil {
 			return fmt.Errorf("get connections: %w", err)
 		}
-		host := strings.ToLower(opts.host)
 		for _, conn := range snap.Connections {
-			if strings.Contains(strings.ToLower(conn.Metadata.Host), host) || strings.Contains(conn.Metadata.DstIP, host) {
+			if hostMatches(conn.Metadata, opts.host) {
 				opts.args = append(opts.args, conn.ID)
 			}
 		}
@@ -331,6 +330,15 @@ func cmdClose(c *api.Client, opts options) error {
 	}
 	fmt.Printf("closed %d of %d connections\n", len(opts.args)-len(errs), len(opts.args))
 	return errors.Join(errs...)
+}
+
+// hostMatches is deliberately narrow because close is destructive: the host
+// itself or a subdomain of it ("github.com" matches "api.github.com" but not
+// "notgithub.com"), or exactly the destination IP.
+func hostMatches(m api.ConnMetadata, want string) bool {
+	want = strings.TrimSuffix(strings.ToLower(want), ".")
+	host := strings.TrimSuffix(strings.ToLower(m.Host), ".")
+	return host == want || strings.HasSuffix(host, "."+want) || m.DstIP == want
 }
 
 func cmdFlush(c *api.Client, opts options) error {
